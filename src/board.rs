@@ -1,13 +1,15 @@
 #![allow(unused)]
-use gtk::prelude::*;
+use crate::Config;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use gtk::glib::clone;
-use fastrand;
 use std::collections::HashMap;
 use std::any::type_name;
+
+use fastrand;
 use gtk::glib;
-use crate::Config;
+use gdk4::ModifierType;
+use gtk::prelude::*;
+use gtk::glib::clone;
 
 fn type_of<T>(_: T) -> &'static str {
     type_name::<T>()
@@ -15,6 +17,10 @@ fn type_of<T>(_: T) -> &'static str {
 
 // masks: the shapes are stored in a 4x4 grid. In each case the initial orientation leaves the top row
 // empty, so the initial placement is at (width/2 - 2, -1). Rotation can use any of the 16 cells.
+// The masks are designed so the first row (last hex digit) is always blank and the firstpiece starts
+// in a horizontal as close to centered as possible, or towards the right if uneven (as most are).
+// This way each piece can be drawn in its initial position by centering the X coord and setting the
+// Y coord to -1
 static PIECES: [Piece; 7] = [
     Piece {name: &"Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], },
     Piece {name: &"Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], },
@@ -28,12 +34,16 @@ static PIECES: [Piece; 7] = [
 // default commands to set up the map. The CHEAT entries can have ad hoc stuff added, the current values
 // set the next piece, which is useful for debugging (and also for getting out of tight spots)
 // TODO: allow custom configurations in the config file
-const COMMANDS:[(&str, Command); 12] =
+const COMMANDS:[(&str, Command); 16] =
     [(&"Right", Command::Right),
      (&"Left", Command::Left),
      (&"Down", Command::Down),
      (&"q", Command::RotateLeft),
+     (&"q-Shift", Command::Left),
      (&"e", Command::RotateRight),
+     (&"Mouse1", Command::Left),
+     (&"Mouse2", Command::Down),
+     (&"Mouse3", Command::Right),
      (&"Cheat(1)", Command::Cheat(1)),
      (&"Cheat(2)", Command::Cheat(2)),
      (&"Cheat(3)", Command::Cheat(3)),
@@ -101,6 +111,9 @@ pub struct Piece {
     masks: [u16; 4],
 }
 impl Piece {
+    fn points(&self, orientation: Orientation) -> u8 {
+        self.points[orientation.offset()]
+    }
     // MASK is a u16 value interpreted as 4 lines of length 4 bits. This can encode all rotations of the pieces.
     fn mask(&self, orientation: Orientation) -> u16 {
         self.masks[orientation.offset()]
@@ -132,9 +145,6 @@ impl Piece {
         big_mask
     }
     
-    fn points(&self, orientation: Orientation) -> u8 {
-        self.points[orientation.offset()]
-    }
     fn random() -> &'static Piece {
         let random = fastrand::usize(0..PIECES.len());
         &PIECES[random]
@@ -152,7 +162,7 @@ pub struct Board {
     grid:          gtk::Grid,
     command_hash:  HashMap<String, Command>,
 
-    // mutable
+    // mutable (maybe put these in a STATE struct?)
     p_x:           Cell<i32>,
     p_y:           Cell<i32>,
     p_orientation: Cell<Orientation>,
@@ -163,16 +173,10 @@ pub struct Board {
 
 impl Board {
     pub fn new(num: usize, app: &gtk::Application, config: &Config) -> Rc<Board> {
-        let grid = gtk::Grid::builder()
-            .margin_start(6)
-            .margin_end(6)
-            .margin_top(6)
-            .margin_bottom(6)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .build();
+        let grid = gtk::Grid::builder().build();
         grid.set_focusable(true);
         grid.add_css_class("board");
+        
         let mut bitmap = vec![0xffffffff; (config.height + 4) as usize];
         let mask = !(((0x1 << config.width) - 1) << 2);
         for i in 0..bitmap.len() - 2 {
@@ -189,7 +193,7 @@ impl Board {
                               p_x: Cell::new(0),
                               p_y: Cell::new(0),
                               p_orientation: Cell::new(Orientation::North),
-                              p_piece: Cell::new(Piece::random()),
+                              p_piece: Cell::new(&PIECES[0]),     // initial piece is discarded
                               p_next_piece: Cell::new(if config.initial_piece < PIECES.len() { &PIECES[config.initial_piece]} else { Piece::random() }),
         };
         // bitmap is a map of the board with 0 for empty spaces and 1 for filled. Initialize it so all bits representing
@@ -197,7 +201,6 @@ impl Board {
         // is a border of at least 2 set bits on the left, right, and bottom of the bitmap. This means that the maximum
         // allowable width, using a 32-but mask, is 28 columns.
         // 
-        board.window.set_title(Some(&["Board ", &board.num.to_string()].concat()));
         for row in 0..board.width {
             for col in 0..board.height {
                 let square = gtk::Box::builder()
@@ -211,20 +214,42 @@ impl Board {
                 board.grid.attach(&square, row, col, 1, 1);
             }
         }
+        board.window.set_title(Some(&["Board ", &board.num.to_string()].concat()));
         board.window.set_child(Some(&board.grid));
         board.start_new_piece();
 
-        let key_handler = gtk::EventControllerKey::new();
-        board.grid.add_controller(&key_handler);
+        // add handlers
         let rc_board = Rc::new(board);
+        let key_handler = gtk::EventControllerKey::new();
+        rc_board.grid.add_controller(&key_handler);
         let rc_board_key_handler = Rc::clone(&rc_board);
-        key_handler.connect_key_pressed(move |_ctlr, key, _code, _state| {
-            rc_board_key_handler.keyboard_input(key);
+        key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
+            rc_board_key_handler.keyboard_input(key, state);
             gtk::Inhibit(false)
+        });
+
+        let mouse_handler1 = gtk::GestureClick::builder().button(1).build();
+        let rc_board_click1_handler = Rc::clone(&rc_board);
+        rc_board.grid.add_controller(&mouse_handler1);
+        mouse_handler1.connect_pressed(move |_, _, _, _ | {
+            rc_board_click1_handler.click_input("Mouse1");
+        });
+        let mouse_handler2 = gtk::GestureClick::builder().button(2).build();
+        let rc_board_click2_handler = Rc::clone(&rc_board);
+        rc_board.grid.add_controller(&mouse_handler2);
+        mouse_handler2.connect_pressed(move |_, _, _, _ | {
+            rc_board_click2_handler.click_input("Mouse2");
+        });
+        let mouse_handler3 = gtk::GestureClick::builder().button(3).build();
+        let rc_board_click3_handler = Rc::clone(&rc_board);
+        rc_board.grid.add_controller(&mouse_handler3);
+        mouse_handler3.connect_pressed(move |_, _, _, _ | {
+            rc_board_click3_handler.click_input("Mouse3");
         });
         rc_board
     }
 
+    // builds the command hash from the array definition
     fn init_command_hash() -> HashMap<String, Command> {
         let mut command_hash: HashMap<String, Command> = HashMap::new();
         for desc in COMMANDS {
@@ -240,6 +265,8 @@ impl Board {
     // Piece handling
     //
     //////////////////////////////////////////////////////////////////
+
+    // called to load a new piece in the board. The drawing function might be able to be merged with draw_moved_piece()?
     fn start_new_piece(&self) {
         self.p_piece.set(self.p_next_piece.get());
         self.p_next_piece.set(Piece::random());
@@ -261,15 +288,25 @@ impl Board {
         self.grid.child_at(5, 5).unwrap().set_css_classes(&["cell", "bar"]);
     }
     
-    fn keyboard_input(&self, key: gdk4::Key) {
-        let command_opt = self.command_hash.get(key.name().unwrap().as_str());
-        let command = match command_opt {
-            Some(cmd) => cmd,
-            _ => &Command::Nop
-        };
-        self.do_command(command);
+    fn click_input(&self, button: &str) {
+        let command_opt = self.command_hash.get(button);
+        // not sure if I can get modifer keys here
+        self.do_command(command_opt.unwrap_or(&Command::Nop));
+
     }
-    
+
+    fn keyboard_input(&self, key: gdk4::Key, modifiers: ModifierType) {
+        let mut key_string = key.to_lower().name().unwrap().to_string();
+        let bits = modifiers.bits();
+        if bits & ModifierType::SHIFT_MASK.bits() != 0 { key_string.push_str("-Shift"); }
+        if bits & ModifierType::ALT_MASK.bits() != 0 { key_string.push_str("-Alt"); }
+        if bits & ModifierType::CONTROL_MASK.bits() != 0 { key_string.push_str("-Ctrl"); }
+        if bits & ModifierType::META_MASK.bits() != 0 { key_string.push_str("-Meta"); }
+        let command_opt = self.command_hash.get(&key_string);
+        self.do_command(command_opt.unwrap_or(&Command::Nop));
+    }
+
+    //fn mouse_input(&self, 
     fn do_command(&self, p_command: &Command) {
         let succeeded = match p_command {
             Command::Left => self.translate_piece(1, 0),
@@ -370,8 +407,9 @@ impl Board {
     }
 
     // lowest level functions
-
-    // 
+    // Drawing the pieces is done by setting css class for widgets in the board.grid object. This way I don't need
+    // to handle any redrawing, and setting the colors is simple. If drawing turns out to be better then board.grid
+    // needs to be replaced with a drawing area and these functions need to be redone
     pub fn cell_at(&self, x: i32, y: i32) -> Option<gtk::Widget> {
         self.grid.child_at(self.width - 1 - x, y)
     }
@@ -379,7 +417,7 @@ impl Board {
     pub fn set_cell(&self, x: i32, y: i32, piece_name: &String) {
         match self.cell_at(x, y) {
             Some(cell) => if piece_name.eq("empty") {cell.set_css_classes(&["cell"])} else {cell.set_css_classes(&["cell", piece_name])},
-            None => println!("trying to set nonexistent cell at ({}, {})", x, y),
+            None => (),
         };
     }
 }
