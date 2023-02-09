@@ -1,0 +1,22 @@
+
+.cell {
+  border: solid 1px;
+  border-color: white;
+  min-height: 25px;
+  min-width: 25px;
+}
+
+.Bar { background-color: red; }
+.Tee { background-color: green; }
+.Square { background-color: blue; }
+.Zee { background-color: yellow; }
+.ReverseZee { background-color: grey; }
+.El { background-color: purple; }
+.ReverseEl { background-color: pink; }
+
+.board {
+  background-color: white;
+  border: solid 5px;
+  border-color: black;
+}
+.selected { border-color: red; }

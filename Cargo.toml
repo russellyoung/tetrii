@@ -1,0 +1,20 @@
+[package]
+name = "mytest"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.1.4", features = ["derive"] }
+delay = "0.3.1"
+dirs = "4.0.0"
+fastrand = "1.8.0"
+gdk4 = "0.5.5"
+gtk = { version = "0.5.5", package = "gtk4", features = ["v4_8"] }
+merge = "0.1.0"
+rand = "0.8.5"
+regex = "1.7.1"
+serde = { version = "1.0.152", features = ["derive"] }
+serde_yaml = "0.9.17"
+
