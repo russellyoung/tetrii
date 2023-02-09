@@ -19,7 +19,7 @@ fn main() {
     gtk::init().expect("Error initializing gtk");
     load_css(&config.style);     // needs app to be active before this can be done
 
-    let p_boards: RefCell<Vec<Rc<Board>>> = RefCell::new(Vec::new());
+    let p_boards: RefCell<Vec<Rc<RefCell<Board>>>> = RefCell::new(Vec::new());
     app.connect_activate( move |app| { build_ui(app, &p_boards, &config); });
 
     let empty: Vec<String> = vec![];  // thanks to stackoverflow, I learned EMPTY is needed to keep GTK from interpreting the command line flags
@@ -38,11 +38,11 @@ fn load_css(filename: &String) {
     );
 }
 
-fn build_ui(app: &gtk::Application, p_boards: &RefCell<Vec<Rc<Board>>>, config: &Config) {
+fn build_ui(app: &gtk::Application, p_boards: &RefCell<Vec<Rc<RefCell<Board>>>>, config: &Config) {
     let mut boards = p_boards.borrow_mut();
     for i in 0..config.boards as usize {
         boards.push(Board::new(i + 1, app, config));
     }
-    boards.iter().for_each(|b| { b.show(); });
+    boards.iter().for_each(|b| { b.borrow().show(); });
 }
 

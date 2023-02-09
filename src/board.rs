@@ -163,16 +163,16 @@ pub struct Board {
     command_hash:  HashMap<String, Command>,
 
     // mutable (maybe put these in a STATE struct?)
-    p_x:           Cell<i32>,
-    p_y:           Cell<i32>,
-    p_orientation: Cell<Orientation>,
-    p_piece:       Cell<&'static Piece>,
-    p_next_piece:  Cell<&'static Piece>,
-    p_bitmap:      RefCell<Vec<u32>>,
+    x:           i32,
+    y:           i32,
+    orientation: Orientation,
+    piece:       &'static Piece,
+    next_piece:  &'static Piece,
+    bitmap:      Vec<u32>,
 }
 
 impl Board {
-    pub fn new(num: usize, app: &gtk::Application, config: &Config) -> Rc<Board> {
+    pub fn new(num: usize, app: &gtk::Application, config: &Config) -> Rc<RefCell<Board>> {
         let grid = gtk::Grid::builder().build();
         grid.set_focusable(true);
         grid.add_css_class("board");
@@ -189,12 +189,12 @@ impl Board {
                               grid: grid,
                               command_hash: Board::init_command_hash(),
 
-                              p_bitmap: RefCell::new(bitmap),
-                              p_x: Cell::new(0),
-                              p_y: Cell::new(0),
-                              p_orientation: Cell::new(Orientation::North),
-                              p_piece: Cell::new(&PIECES[0]),     // initial piece is discarded
-                              p_next_piece: Cell::new(if config.initial_piece < PIECES.len() { &PIECES[config.initial_piece]} else { Piece::random() }),
+                              bitmap: bitmap,
+                              x: 0,
+                              y: 0,
+                              orientation: Orientation::North,
+                              piece: &PIECES[0],     // initial piece is discarded
+                              next_piece: if config.initial_piece < PIECES.len() { &PIECES[config.initial_piece]} else { Piece::random() },
         };
         // bitmap is a map of the board with 0 for empty spaces and 1 for filled. Initialize it so all bits representing
         // cells of the bitmap are 0 and all other bits are 1. To avoid having to worry about overflow or underflow there
@@ -219,32 +219,33 @@ impl Board {
         board.start_new_piece();
 
         // add handlers
-        let rc_board = Rc::new(board);
+        let ref_board = RefCell::new(board);
+        let rc_board = Rc::new(ref_board);
         let key_handler = gtk::EventControllerKey::new();
-        rc_board.grid.add_controller(&key_handler);
+        rc_board.borrow().grid.add_controller(&key_handler);
         let rc_board_key_handler = Rc::clone(&rc_board);
         key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
-            rc_board_key_handler.keyboard_input(key, state);
+            rc_board_key_handler.borrow_mut().keyboard_input(key, state);
             gtk::Inhibit(false)
         });
 
         let mouse_handler1 = gtk::GestureClick::builder().button(1).build();
         let rc_board_click1_handler = Rc::clone(&rc_board);
-        rc_board.grid.add_controller(&mouse_handler1);
+        rc_board.borrow().grid.add_controller(&mouse_handler1);
         mouse_handler1.connect_pressed(move |_, _, _, _ | {
-            rc_board_click1_handler.click_input("Mouse1");
+            rc_board_click1_handler.borrow_mut().click_input("Mouse1");
         });
         let mouse_handler2 = gtk::GestureClick::builder().button(2).build();
         let rc_board_click2_handler = Rc::clone(&rc_board);
-        rc_board.grid.add_controller(&mouse_handler2);
+        rc_board.borrow().grid.add_controller(&mouse_handler2);
         mouse_handler2.connect_pressed(move |_, _, _, _ | {
-            rc_board_click2_handler.click_input("Mouse2");
+            rc_board_click2_handler.borrow_mut().click_input("Mouse2");
         });
         let mouse_handler3 = gtk::GestureClick::builder().button(3).build();
         let rc_board_click3_handler = Rc::clone(&rc_board);
-        rc_board.grid.add_controller(&mouse_handler3);
+        rc_board.borrow().grid.add_controller(&mouse_handler3);
         mouse_handler3.connect_pressed(move |_, _, _, _ | {
-            rc_board_click3_handler.click_input("Mouse3");
+            rc_board_click3_handler.borrow_mut().click_input("Mouse3");
         });
         rc_board
     }
@@ -267,48 +268,46 @@ impl Board {
     //////////////////////////////////////////////////////////////////
 
     // called to load a new piece in the board. The drawing function might be able to be merged with draw_moved_piece()?
-    fn start_new_piece(&self) {
-        self.p_piece.set(self.p_next_piece.get());
-        self.p_next_piece.set(Piece::random());
-        self.p_orientation.set(Orientation::North);
-        self.p_x.set(self.width/2 - 2);
-        self.p_y.set(-1);
-        let mut mask = self.p_piece.get().mask(self.p_orientation.get());
-        let name = self.p_piece.get().name.to_string();
+    fn start_new_piece(&mut self) {
+        self.piece = self.next_piece;
+        self.next_piece = Piece::random();
+        self.orientation = Orientation::North;
+        (self.x, self.y) = (self.width/2 - 2, -1);
+        let mut mask = self.piece.mask(self.orientation);
+        let name = self.piece.name.to_string();
         let mut i = 0;
         while mask != 0 {
             if mask & 1 == 1 {
                 let row = i / 4;
                 let col = i % 4;
-                self.set_cell(self.p_x.get() + col, self.p_y.get() + row, &name);
+                self.set_cell(self.x + col, self.y + row, &name);
             }
             i += 1;
             mask >>= 1;
         }
         self.grid.child_at(5, 5).unwrap().set_css_classes(&["cell", "bar"]);
     }
-    
-    fn click_input(&self, button: &str) {
-        let command_opt = self.command_hash.get(button);
-        // not sure if I can get modifer keys here
-        self.do_command(command_opt.unwrap_or(&Command::Nop));
 
+    fn click_input(&mut self, button: &str) {
+        let command = *self.command_hash.get(button).unwrap_or(&Command::Nop);
+        // not sure if I can get modifer keys here
+        self.do_command(&command);
     }
 
-    fn keyboard_input(&self, key: gdk4::Key, modifiers: ModifierType) {
+    fn keyboard_input(&mut self, key: gdk4::Key, modifiers: ModifierType) {
         let mut key_string = key.to_lower().name().unwrap().to_string();
         let bits = modifiers.bits();
         if bits & ModifierType::SHIFT_MASK.bits() != 0 { key_string.push_str("-Shift"); }
         if bits & ModifierType::ALT_MASK.bits() != 0 { key_string.push_str("-Alt"); }
         if bits & ModifierType::CONTROL_MASK.bits() != 0 { key_string.push_str("-Ctrl"); }
         if bits & ModifierType::META_MASK.bits() != 0 { key_string.push_str("-Meta"); }
-        let command_opt = self.command_hash.get(&key_string);
-        self.do_command(command_opt.unwrap_or(&Command::Nop));
+        let command = *self.command_hash.get(&key_string).unwrap_or(&Command::Nop);
+        self.do_command(&command);
     }
-
+    
     //fn mouse_input(&self, 
-    fn do_command(&self, p_command: &Command) {
-        let succeeded = match p_command {
+    fn do_command(&mut self, command: &Command) {
+        let succeeded = match command {
             Command::Left => self.translate_piece(1, 0),
             Command::Right => self.translate_piece(-1, 0),
             Command::Down => self.translate_piece(0, 1),
@@ -317,33 +316,33 @@ impl Board {
             Command::Cheat(x) => self.cheat(*x),
             _ => true,
         };
-        if !succeeded && *p_command == Command::Down {
+        if !succeeded && *command == Command::Down {
             println!("down failed, piece ended");
         }
     }
 
-    fn rotate_piece(&self, rotate: Command) -> bool {
-        let orientation = self.p_orientation.get().rotate(rotate);
-        let mask = self.p_piece.get().mask(orientation);
-        if !self.can_move(mask, self.p_x.get(), self.p_y.get()) { return false; }
+    fn rotate_piece(&mut self, rotate: Command) -> bool {
+        let orientation = self.orientation.rotate(rotate);
+        let mask = self.piece.mask(orientation);
+        if !self.can_move(mask, self.x, self.y) { return false; }
         self.draw_moved_piece(0, 0, orientation);
         true
     }
     
-    fn translate_piece(&self, dx: i32, dy: i32) -> bool {
+    fn translate_piece(&mut self, dx: i32, dy: i32) -> bool {
         // TODO: check if possible first
-        let piece = self.p_piece.get();
-        let (x, y) = (self.p_x.get() + dx, self.p_y.get() + dy);
-        let mut mask = piece.mask(self.p_orientation.get());
+        let piece = self.piece;
+        let (x, y) = (self.x + dx, self.y + dy);
+        let mut mask = piece.mask(self.orientation);
         if !self.can_move(mask, x, y) { return false; }
-        self.draw_moved_piece(dx, dy, self.p_orientation.get());
+        self.draw_moved_piece(dx, dy, self.orientation);
         true
     }
 
     // Cheat codes, mainly used for debugging but can be added to "for fun"
     // Initially set 1..8 to select the next piece
-    fn cheat(&self, x: usize) -> bool {
-        self.p_next_piece.set(&(PIECES[x - 1]));
+    fn cheat(&mut self, x: usize) -> bool {
+        self.next_piece = &PIECES[x - 1];
         true
     }
     
@@ -352,9 +351,8 @@ impl Board {
     // is fully contained in the bitmap
     fn can_move(&self, mut mask: u16, x: i32, mut y: i32) -> bool {
         let mut row: usize = (y + 2) as usize;
-        let bitmap = self.p_bitmap.borrow();
         for i in 0..4 {
-            let row_bits: u16 = ((bitmap[row] >> x + 2) & 0xf) as u16;
+            let row_bits: u16 = ((self.bitmap[row] >> x + 2) & 0xf) as u16;
             if row_bits & mask != 0 { return false; }
             mask >>= 4;
             row += 1;
@@ -364,12 +362,12 @@ impl Board {
 
     // Moves a piece to a new position. The new position should have already been checked, this
     // assumes the move can be made
-    fn draw_moved_piece(&self, dx:i32, dy: i32, o1: Orientation) {
-        let piece = self.p_piece.get();
-        let (x0, y0) = (self.p_x.get(), self.p_y.get());
+    fn draw_moved_piece(&mut self, dx:i32, dy: i32, o1: Orientation) {
+        let piece = self.piece;
+        let (x0, y0) = (self.x, self.y);
         let (x1, y1) = (x0 + dx, y0 + dy);
         // clear all cells which do not remain on
-        let big_mask0 = piece.big_mask(self.p_orientation.get(), 0, 0);
+        let big_mask0 = piece.big_mask(self.orientation, 0, 0);
         let big_mask1 = piece.big_mask(o1, dx, dy);
         let mut clear_mask = big_mask0 & !big_mask1;
         let empty = "empty".to_string();
@@ -385,7 +383,7 @@ impl Board {
         }
         
         let name = piece.name.to_string();
-        let big_mask0 = piece.big_mask(self.p_orientation.get(), -dx, 0);
+        let big_mask0 = piece.big_mask(self.orientation, -dx, 0);
         let big_mask1 = piece.big_mask(o1, 0, dy);
         let mut set_mask = big_mask1 & !big_mask0;
         i = 0;
@@ -399,11 +397,8 @@ impl Board {
             set_mask >>= 1;
         }
         
-        self.p_x.set(x1);
-        self.p_y.set(y1);
-        self.p_orientation.set(o1);
-        
-
+        (self.x, self.y) = (x1, y1);
+        self.orientation = o1;
     }
 
     // lowest level functions
