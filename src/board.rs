@@ -3,13 +3,13 @@ use crate::Config;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::HashMap;
-use std::any::type_name;
 
 use fastrand;
 use gdk4::ModifierType;
 use gtk::prelude::*;
 
 /* for debugging
+use std::any::type_name;
 fn type_of<T>(_: T) -> &'static str {
     type_name::<T>()
 }
@@ -69,33 +69,42 @@ fn type_of<T>(_: T) -> &'static str {
 //
 //////////////////////////////////////////////////////////////////
 
-const DROP_DELAY_MSEC: u64 = 100;
+// ratio between the clock tick rate and the drop clock tick rate
+const DROP_DELAY_SPEEDUP: u64 = 8;
 
 // default commands to set up the map. The CHEAT entries can have ad hoc stuff added, the current values
 // set the next piece, which is useful for debugging (and also for getting out of tight spots)
 // TODO: allow custom configurations in the config file
-const COMMANDS:[(&str, Command); 19] =
-    [(&"Right",    Command::Right),
-     (&"Left",     Command::Left),
-     (&"Down",     Command::Down),
-     (&"q",        Command::RotateLeft),
-     (&"q-Shift",  Command::Left),
-     (&"e",        Command::RotateRight),
-     (&"space",    Command::Drop),
-     (&"s",        Command::Resume),
-     (&"t",        Command::TogglePause),
-     (&"Mouse1",   Command::Left),
-     (&"Mouse2",   Command::Down),
-     (&"Mouse3",   Command::Right),
-     (&"Cheat(1)", Command::Cheat(1)),
-     (&"Cheat(2)", Command::Cheat(2)),
-     (&"Cheat(3)", Command::Cheat(3)),
-     (&"Cheat(4)", Command::Cheat(4)),
-     (&"Cheat(5)", Command::Cheat(5)),
-     (&"Cheat(6)", Command::Cheat(6)),
-     (&"Cheat(7)", Command::Cheat(7)),
+const COMMANDS:[(&str, Command); 20] =
+    [(&"Right",  Command::Right),
+     (&"Left",   Command::Left),
+     (&"Down",   Command::Down),
+     (&"q",      Command::RotateLeft),
+     (&"q-Shift",Command::Left),
+     (&"e",      Command::RotateRight),
+     (&"space",  Command::Drop),
+     (&"s",      Command::Resume),
+     (&"t",      Command::TogglePause),
+     (&"p",      Command::Pause),
+     (&"Mouse1", Command::Left),
+     (&"Mouse2", Command::Down),
+     (&"Mouse3", Command::Right),
+     (&"1",      Command::Cheat(1)),
+     (&"2",      Command::Cheat(2)),
+     (&"3",      Command::Cheat(3)),
+     (&"4",      Command::Cheat(4)),
+     (&"5",      Command::Cheat(5)),
+     (&"6",      Command::Cheat(6)),
+     (&"7",      Command::Cheat(7)),
 ];
 
+// builds the command hash from the array definition
+fn init_command_hash() -> HashMap<String, Command> {
+    let mut command_hash: HashMap<String, Command> = HashMap::new();
+    COMMANDS.iter().for_each(|desc| { command_hash.insert(desc.0.to_string(), desc.1); });
+    command_hash
+}
+    
 // I know this is frowned on. The problem is that I need to be able to signal boards from within callbacks,
 // from keys, mouse clicks, and timer events. Those all require 'static lifetime, and I couldn't find any
 // way to "fool the compiler" to make it work. Is there a better way?
@@ -112,7 +121,7 @@ static PIECES: [Piece; 7] = [
 ];
 
 // if I have time and interest the commands will be configurable through the .tetrii file
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Command {Left, Right, Down, RotateRight, RotateLeft, Drop, Pause, Resume, TogglePause, SetBoard(i32), Cheat(usize), Nop, }
 
 #[derive(Copy, Clone, Debug)]
@@ -208,10 +217,8 @@ impl Piece {
     fn mask(&self, orientation: Orientation) -> u16 {
         self.masks[orientation.offset()]
     }
+    // BIG_MASKis a 5x6 array (fitting in 32 bits) used to map a piece and the rows to its left, right, and bottom
     fn big_mask(&self, orientation: Orientation, dx: i32, dy: i32) -> u32 {
-        // these catch programming errors
-        assert!(dx == -1 || dx == 0 || dx == 1, "ERROR: bad dx value when moving piece");
-        assert!(dy == 0 || dy == 1, "ERROR: bad dy value when moving piece");
         let mut big_mask:u32 = 0x0;
         let mut mask = self.mask(orientation);
         let mut shift = 1 + dx + 6*dy;
@@ -227,7 +234,6 @@ impl Piece {
     fn random() -> &'static Piece {
         &PIECES[fastrand::usize(0..PIECES.len())]
     }
-    
 }
 
 impl Board {
@@ -246,7 +252,7 @@ impl Board {
                               height: config.height as i32,
                               window: gtk::ApplicationWindow::new(app).into(),
                               grid: grid,
-                              command_hash: Board::init_command_hash(),
+                              command_hash: init_command_hash(),
                               bitmap: bitmap,
                               state: State::Paused,
                               dropping: false,
@@ -292,6 +298,7 @@ impl Board {
             gtk::Inhibit(false)
         });
         // Do I really need a different handler for each button to know which one was pressed?
+        // And is there any way to get modifier keys, short of keeping track of the presses?
         let mouse_handler1 = gtk::GestureClick::builder().button(1).build();
         let rc_board_click1 = Rc::clone(&rc_board);
         rc_board.borrow().grid.add_controller(&mouse_handler1);
@@ -313,13 +320,6 @@ impl Board {
         rc_board
     }
 
-    // builds the command hash from the array definition
-    fn init_command_hash() -> HashMap<String, Command> {
-        let mut command_hash: HashMap<String, Command> = HashMap::new();
-        COMMANDS.iter().for_each(|desc| { command_hash.insert(desc.0.to_string(), desc.1); });
-        command_hash
-    }
-    
     pub fn show(&self) { self.window.show(); }
 
     //////////////////////////////////////////////////////////////////
@@ -378,21 +378,39 @@ impl Board {
     //
     //////////////////////////////////////////////////////////////////
     fn do_command(&mut self, command: &Command) -> bool {
-        //
-        match command {
-            Command::Left => self.translate_piece(1, 0),
-            Command::Right => self.translate_piece(-1, 0),
-            Command::Down => self.translate_piece(0, 1),
-            Command::Drop => self.do_drop(),
-            Command::RotateRight => self.rotate_piece(Command::RotateRight),
-            Command::RotateLeft => self.rotate_piece(Command::RotateLeft),
-            Command::Cheat(x) => self.cheat(*x),
-            Command::Resume => self.change_state(State::Running),
-            Command::TogglePause => self.change_state(self.state.toggle()),
-            _ => true,
+        if self.state == State::Running || command == &Command::TogglePause || command == &Command::Resume {
+            match command {
+                Command::Left => self.translate_piece(1, 0),
+                Command::Right => self.translate_piece(-1, 0),
+                Command::Down => self.translate_piece(0, 1),
+                Command::Drop => self.do_drop(),
+                Command::RotateRight => self.rotate_piece(Command::RotateRight),
+                Command::RotateLeft => self.rotate_piece(Command::RotateLeft),
+                Command::Cheat(x) => self.cheat(*x),
+                Command::Resume => self.control_all(State::Running),
+                Command::Pause => self.control_all(State::Paused),
+                Command::TogglePause => self.control_all(self.state.toggle()),
+                _ => true,
+            }
+        } else {
+            true
         }
     }
 
+    fn control_all(&mut self, new_state: State, ) -> bool {
+        // This accesses all the boards. The problem is the current one is already owned as mut so its pointer in
+        // BOARDS cannot be referenced. It is, however, available as SELF, so it gets handled differently.
+        // Again, since this all runs in a single thread, there is no danger in accessing the static values.
+        unsafe {
+            for i in 0..BOARDS.len() {
+                if i == self.num - 1 { self.change_state(new_state); }
+                else { BOARDS[i].borrow_mut().change_state(new_state); }
+            }
+        }
+        true
+    }
+
+    
     fn rotate_piece(&mut self, rotate: Command) -> bool {
         let orientation = self.orientation.rotate(rotate);
         let mask = self.piece.mask(orientation);
@@ -426,7 +444,7 @@ impl Board {
         true
     }
     
-    fn change_state(&mut self, mut new_state: State) -> bool {
+    fn change_state(&mut self, new_state: State) -> bool {
         if self.state == State::Finished || new_state == self.state {return true; }
         self.state = new_state;
         match self.state {
@@ -522,13 +540,14 @@ impl Board {
         unsafe {
             let p_board = &BOARDS[self.num - 1];
             let f = move || -> glib::Continue {
-                let mut mut_board = p_board.borrow_mut();
-                if mut_board.dropping {
-                    // if dropping don't stop the clock, but don't move the piece either
-                    return glib::Continue(true);
-                }
-                glib::Continue(mut_board.do_command(&Command::Down) ||      // move down...
-                               mut_board.start_new_piece(false))            // or get new piece
+                let mut mut_board = p_board.borrow_mut(); 
+                glib::Continue(
+                    if mut_board.dropping { true }                      // continue the timer, but don't move the piece
+                    else if mut_board.state != State::Running { false } // stop if paused or finished
+                    else {
+                        mut_board.do_command(&Command::Down) ||         // move down if possible...
+                            mut_board.start_new_piece(false)            // ... or get new piece
+                    })
             };
             glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
         }
@@ -536,6 +555,7 @@ impl Board {
 
     fn drop_tick(&self) {
         unsafe {
+            let msec = self.delay/DROP_DELAY_SPEEDUP;
             let p_board = &BOARDS[self.num - 1];
             let f = move || -> glib::Continue {
                 let mut mut_board = p_board.borrow_mut();
@@ -547,7 +567,7 @@ impl Board {
                 }
                 glib::Continue(success)
             };
-            glib::timeout_add_local(core::time::Duration::from_millis(DROP_DELAY_MSEC), f);
+            glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
         }
     }
 
