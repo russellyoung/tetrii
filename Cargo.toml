@@ -1,5 +1,5 @@
 [package]
-name = "mytest"
+name = "tetrii"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,6 +11,7 @@ delay = "0.3.1"
 dirs = "4.0.0"
 fastrand = "1.8.0"
 gdk4 = "0.5.5"
+glib = "0.17.0"
 gtk = { version = "0.5.5", package = "gtk4", features = ["v4_8"] }
 merge = "0.1.0"
 rand = "0.8.5"

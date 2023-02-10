@@ -1,49 +1,92 @@
 #![allow(unused)]
 use crate::Config;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::HashMap;
 use std::any::type_name;
 
 use fastrand;
-use gtk::glib;
 use gdk4::ModifierType;
 use gtk::prelude::*;
-use gtk::glib::clone;
 
+/* for debugging
 fn type_of<T>(_: T) -> &'static str {
     type_name::<T>()
 }
+ */
 
-// masks: the shapes are stored in a 4x4 grid. In each case the initial orientation leaves the top row
+/* TODO:
+ * - timer for drop
+ * - add score to boards
+ * - modifiers for mouse click?
+ * - 2 (multiple?) commands per key
+ * - add preview to boards
+ * - make main window (overall score, control buttons)
+ * - finish implementng commands
+ * - custom key assignments in yaml file
+ * - animation
+ */
+
+//////////////////////////////////////////////////////////////////
+//
+// Coordinate systems:
+//
+// There are 3 coordinate systems in use in the program, used at different layers. The most useful is
+// the logical board. This is a conceptual bitmap LENGTHxWIDTH with the origin at the upper right.
+// This is what the logic uses through most of the program.
+//
+// The second system is the actual bitmap (board.bitmap). This contains the logical board but is bigger:
+// it contains a border of 2 bits on all sides so that I don't have to worry about overruns. It too has
+// the origin at th eupper right, but the origin of the logical board is located at (2, 2) in this
+// system.
+//
+// Finally, there is the Grid widget used for display. It too is LENGTHxWIDTH but its origin is at
+// the upper left, not right, so the X coordinate is flipped from the board's
+//
+//
+// Masks
+// 
+// the shapes are stored in a 4x4 grid. In each case the initial orientation leaves the top row
 // empty, so the initial placement is at (width/2 - 2, -1). Rotation can use any of the 16 cells.
 // The masks are designed so the first row (last hex digit) is always blank and the firstpiece starts
 // in a horizontal as close to centered as possible, or towards the right if uneven (as most are).
 // This way each piece can be drawn in its initial position by centering the X coord and setting the
-// Y coord to -1
-static PIECES: [Piece; 7] = [
-    Piece {name: &"Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], },
-    Piece {name: &"Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], },
-    Piece {name: &"Square",     points: [ 4, 4,  4, 4, ], masks: [0x0660, 0x0660, 0x0660, 0x0660, ], },
-    Piece {name: &"Zee",        points: [ 5, 3,  5, 3, ], masks: [0x0360, 0x0462, 0x0360, 0x0462, ], },
-    Piece {name: &"ReverseZee", points: [ 5, 3,  5, 3, ], masks: [0x0630, 0x0264, 0x0630, 0x0264, ], },
-    Piece {name: &"El",         points: [ 6, 6,  3, 3, ], masks: [0x0470, 0x0322, 0x0071, 0x0226, ], },
-    Piece {name: &"ReverseEl",  points: [ 3, 3,  6, 6, ], masks: [0x0740, 0x2230, 0x0170, 0x0622, ], },
-];
+// Y coord to -1. The masks are used to check if a piece can fit in a new position and to draw it if
+// it does fit.
+//
+// There is a second mask used also, called big_mask. This is logically a 5x6 grid with the 4x4 mask
+// embedded in it:
+//
+//    . x x x x .     
+//    . x x x x .
+//    . x x x x .
+//    . x x x x .
+//    . . . . . .
+//
+// This way when a cell is moved one unit in any of the 3 directions (LEFT, DOWN, RIGHT) the bigmask
+// of the old position can be ANDed with the bigmask of the new position to find the cells which need
+// to be redrawn.
+//
+//////////////////////////////////////////////////////////////////
+
+const DROP_DELAY_MSEC: u64 = 100;
 
 // default commands to set up the map. The CHEAT entries can have ad hoc stuff added, the current values
 // set the next piece, which is useful for debugging (and also for getting out of tight spots)
 // TODO: allow custom configurations in the config file
-const COMMANDS:[(&str, Command); 16] =
-    [(&"Right", Command::Right),
-     (&"Left", Command::Left),
-     (&"Down", Command::Down),
-     (&"q", Command::RotateLeft),
-     (&"q-Shift", Command::Left),
-     (&"e", Command::RotateRight),
-     (&"Mouse1", Command::Left),
-     (&"Mouse2", Command::Down),
-     (&"Mouse3", Command::Right),
+const COMMANDS:[(&str, Command); 19] =
+    [(&"Right",    Command::Right),
+     (&"Left",     Command::Left),
+     (&"Down",     Command::Down),
+     (&"q",        Command::RotateLeft),
+     (&"q-Shift",  Command::Left),
+     (&"e",        Command::RotateRight),
+     (&"space",    Command::Drop),
+     (&"s",        Command::Resume),
+     (&"t",        Command::TogglePause),
+     (&"Mouse1",   Command::Left),
+     (&"Mouse2",   Command::Down),
+     (&"Mouse3",   Command::Right),
      (&"Cheat(1)", Command::Cheat(1)),
      (&"Cheat(2)", Command::Cheat(2)),
      (&"Cheat(3)", Command::Cheat(3)),
@@ -53,19 +96,68 @@ const COMMANDS:[(&str, Command); 16] =
      (&"Cheat(7)", Command::Cheat(7)),
 ];
 
-// Coordinate systems:
-//
-// There are 2 coordinate systems in use in the program. One is used for the CSS Grid. This is
-// numbered from (0, 0) in the upper right to (width - 1, height - 1) in the lower left.
-// A separate system is used for the bitmap. In this there are borders of unused bits to avoid
-// having to check for overrun or underrun. The bitmap has an extra row on top, 2 on each side,
-// and one on the bottom, so bitmap lines and columns need to be adjusted to get gri
+// I know this is frowned on. The problem is that I need to be able to signal boards from within callbacks,
+// from keys, mouse clicks, and timer events. Those all require 'static lifetime, and I couldn't find any
+// way to "fool the compiler" to make it work. Is there a better way?
+pub static mut BOARDS: Vec<Rc<RefCell<Board>>> = Vec::new();
+
+static PIECES: [Piece; 7] = [
+    Piece {name: &"Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], pos: 0, },
+    Piece {name: &"Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], pos: 1, },
+    Piece {name: &"Square",     points: [ 4, 4,  4, 4, ], masks: [0x0660, 0x0660, 0x0660, 0x0660, ], pos: 2, },
+    Piece {name: &"Zee",        points: [ 5, 3,  5, 3, ], masks: [0x0360, 0x0462, 0x0360, 0x0462, ], pos: 3, },
+    Piece {name: &"ReverseZee", points: [ 5, 3,  5, 3, ], masks: [0x0630, 0x0264, 0x0630, 0x0264, ], pos: 4, },
+    Piece {name: &"El",         points: [ 6, 6,  3, 3, ], masks: [0x0470, 0x0322, 0x0071, 0x0226, ], pos: 5, },
+    Piece {name: &"ReverseEl",  points: [ 3, 3,  6, 6, ], masks: [0x0740, 0x2230, 0x0170, 0x0622, ], pos: 6, },
+];
 
 // if I have time and interest the commands will be configurable through the .tetrii file
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug)]
 pub enum Command {Left, Right, Down, RotateRight, RotateLeft, Drop, Pause, Resume, TogglePause, SetBoard(i32), Cheat(usize), Nop, }
+
 #[derive(Copy, Clone, Debug)]
 pub enum Orientation {North, East, South, West, }
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum State { Paused, Running, Finished, }
+
+#[derive(Debug)]
+pub struct Piece {
+    // NAME is used to identify the piece. It also is the name of the CSS class used to draw the piece.
+    name: &'static str,
+    pos: usize,
+    // These arrays give the values for each piece. There are 4 for each - some pieces need fewer (BAR
+    // needs 2, SQUARE needs 1), but rather than deal with different length vectors it is simpler just
+    // to repeat the values until there are 4.
+    // (NOTE: other implementations have used circular linked lists to manage this. Listing 4 rotations for
+    // each object probably takes less code than handling the different cases individually)
+    points: [u8; 4],
+    masks: [u16; 4],
+}
+
+#[derive(Debug, Clone)]
+pub struct Board {
+    // immutable
+    num:          usize,      // for ID purpose
+    width:        i32,
+    height:       i32,
+    window:       gtk::Window,
+    grid:         gtk::Grid,
+    command_hash: HashMap<String, Command>,
+    // Following are mutable. I asked on rust-lang and they suggested the approach of making the whole struct mutable
+    state:        State,
+    dropping:     bool,       // flag set for when piece is dropping. It could be made a substate of Running, but this is simpler
+    x:            i32,
+    y:            i32,
+    orientation:  Orientation,
+    score:        u32,
+    piece_count:  [u32; 7],
+    piece:        &'static Piece,
+    next_piece:   &'static Piece,
+    delay:        u64,
+    bitmap:       Vec<u32>,
+}
+
 
 impl Orientation {
     pub fn rotate(&self, command: Command) -> Orientation {
@@ -98,18 +190,16 @@ impl Orientation {
     }
 }
 
-#[derive(Debug)]
-pub struct Piece {
-    // NAME is used to identify the piece. It also is the name of the CSS class used to draw the piece.
-    name: &'static str,
-    // These arrays give the values for each piece. There are 4 for each - some pieces need fewer (BAR
-    // needs 2, SQUARE needs 1), but rather than deal with different length vectors it is simpler just
-    // to repeat the values until there are 4.
-    // (NOTE: other implementations have used circular linked lists to manage this. Listing 4 rotations for
-    // each object probably takes less code than handling the different cases individually)
-    points: [u8; 4],
-    masks: [u16; 4],
+impl State {
+    fn toggle(&self) -> State {
+        match self {
+            State::Finished => State::Finished,
+            State::Paused => State::Running,
+            State::Running => State::Paused,
+        }
+    }
 }
+
 impl Piece {
     fn points(&self, orientation: Orientation) -> u8 {
         self.points[orientation.offset()]
@@ -118,17 +208,6 @@ impl Piece {
     fn mask(&self, orientation: Orientation) -> u16 {
         self.masks[orientation.offset()]
     }
-    // BIG_MASK is a u32 value that elso encodes the pieces. It is used in drawing pieces. The simplest way to
-    // redraw pieces after a move is to erase them and redraw them in the new position. This works but is inefficient,
-    // and the pieces seem to flicker as they all get redrawn. By embedding the 4x4 map into a 6x5 one the old
-    // position and the new one can be compared, and cells only rewritten if they change.
-    //
-    //    . x x x x .     This is what the masks look like. dx can only be -1, 0, or 1, and dy can only be 0 or 1
-    //    . x x x x .
-    //    . x x x x .
-    //    . x x x x .
-    //    . . . . . .
-    
     fn big_mask(&self, orientation: Orientation, dx: i32, dy: i32) -> u32 {
         // these catch programming errors
         assert!(dx == -1 || dx == 0 || dx == 1, "ERROR: bad dx value when moving piece");
@@ -146,29 +225,9 @@ impl Piece {
     }
     
     fn random() -> &'static Piece {
-        let random = fastrand::usize(0..PIECES.len());
-        &PIECES[random]
+        &PIECES[fastrand::usize(0..PIECES.len())]
     }
-
-}
-
-#[derive(Debug, Clone)]
-pub struct Board {
-    // immutable
-    num:           usize,
-    width:         i32,
-    height:        i32,
-    window:        gtk::Window,
-    grid:          gtk::Grid,
-    command_hash:  HashMap<String, Command>,
-
-    // mutable (maybe put these in a STATE struct?)
-    x:           i32,
-    y:           i32,
-    orientation: Orientation,
-    piece:       &'static Piece,
-    next_piece:  &'static Piece,
-    bitmap:      Vec<u32>,
+    
 }
 
 impl Board {
@@ -188,12 +247,16 @@ impl Board {
                               window: gtk::ApplicationWindow::new(app).into(),
                               grid: grid,
                               command_hash: Board::init_command_hash(),
-
                               bitmap: bitmap,
+                              state: State::Paused,
+                              dropping: false,
                               x: 0,
                               y: 0,
                               orientation: Orientation::North,
+                              score: 0,
+                              piece_count: [0; 7],
                               piece: &PIECES[0],     // initial piece is discarded
+                              delay: 500,
                               next_piece: if config.initial_piece < PIECES.len() { &PIECES[config.initial_piece]} else { Piece::random() },
         };
         // bitmap is a map of the board with 0 for empty spaces and 1 for filled. Initialize it so all bits representing
@@ -203,49 +266,49 @@ impl Board {
         // 
         for row in 0..board.width {
             for col in 0..board.height {
-                let square = gtk::Box::builder()
+                let cell = gtk::Box::builder()
                     .orientation(gtk::Orientation::Vertical)
                     .build();
                 let label = gtk::Label::builder()
                     .label("")
                     .build();
                 label.add_css_class("cell");
-                square.append(&label);
-                board.grid.attach(&square, row, col, 1, 1);
+                cell.append(&label);
+                board.grid.attach(&cell, row, col, 1, 1);
             }
         }
         board.window.set_title(Some(&["Board ", &board.num.to_string()].concat()));
         board.window.set_child(Some(&board.grid));
-        board.start_new_piece();
+        board.start_new_piece(true);
 
         // add handlers
         let ref_board = RefCell::new(board);
         let rc_board = Rc::new(ref_board);
         let key_handler = gtk::EventControllerKey::new();
         rc_board.borrow().grid.add_controller(&key_handler);
-        let rc_board_key_handler = Rc::clone(&rc_board);
+        let rc_board_key = Rc::clone(&rc_board);
         key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
-            rc_board_key_handler.borrow_mut().keyboard_input(key, state);
+            rc_board_key.borrow_mut().keyboard_input(key, state);
             gtk::Inhibit(false)
         });
-
+        // Do I really need a different handler for each button to know which one was pressed?
         let mouse_handler1 = gtk::GestureClick::builder().button(1).build();
-        let rc_board_click1_handler = Rc::clone(&rc_board);
+        let rc_board_click1 = Rc::clone(&rc_board);
         rc_board.borrow().grid.add_controller(&mouse_handler1);
         mouse_handler1.connect_pressed(move |_, _, _, _ | {
-            rc_board_click1_handler.borrow_mut().click_input("Mouse1");
+            rc_board_click1.borrow_mut().click_input("Mouse1");
         });
         let mouse_handler2 = gtk::GestureClick::builder().button(2).build();
-        let rc_board_click2_handler = Rc::clone(&rc_board);
+        let rc_board_click2 = Rc::clone(&rc_board);
         rc_board.borrow().grid.add_controller(&mouse_handler2);
         mouse_handler2.connect_pressed(move |_, _, _, _ | {
-            rc_board_click2_handler.borrow_mut().click_input("Mouse2");
+            rc_board_click2.borrow_mut().click_input("Mouse2");
         });
         let mouse_handler3 = gtk::GestureClick::builder().button(3).build();
-        let rc_board_click3_handler = Rc::clone(&rc_board);
+        let rc_board_click3 = Rc::clone(&rc_board);
         rc_board.borrow().grid.add_controller(&mouse_handler3);
         mouse_handler3.connect_pressed(move |_, _, _, _ | {
-            rc_board_click3_handler.borrow_mut().click_input("Mouse3");
+            rc_board_click3.borrow_mut().click_input("Mouse3");
         });
         rc_board
     }
@@ -253,9 +316,7 @@ impl Board {
     // builds the command hash from the array definition
     fn init_command_hash() -> HashMap<String, Command> {
         let mut command_hash: HashMap<String, Command> = HashMap::new();
-        for desc in COMMANDS {
-            command_hash.insert(desc.0.to_string(), desc.1);
-        }
+        COMMANDS.iter().for_each(|desc| { command_hash.insert(desc.0.to_string(), desc.1); });
         command_hash
     }
     
@@ -268,13 +329,24 @@ impl Board {
     //////////////////////////////////////////////////////////////////
 
     // called to load a new piece in the board. The drawing function might be able to be merged with draw_moved_piece()?
-    fn start_new_piece(&mut self) {
+    fn start_new_piece(&mut self, initial: bool) -> bool{
+        // The first time through there is no old piece to record on the bitmap. In subsequent calls the old piece
+        // needs to be transferred to the bitmap before loading a new one
+        if !initial {
+            self.add_piece_to_bitmap()
+        }
+        
         self.piece = self.next_piece;
         self.next_piece = Piece::random();
         self.orientation = Orientation::North;
         (self.x, self.y) = (self.width/2 - 2, -1);
-        let mut mask = self.piece.mask(self.orientation);
+        if !self.can_move(self.piece.mask(self.orientation), self.x, self.y) {
+            self.change_state(State::Finished);
+            return false;
+        }
+        self.piece_count[self.piece.pos] += 1;
         let name = self.piece.name.to_string();
+        let mut mask = self.piece.mask(self.orientation);
         let mut i = 0;
         while mask != 0 {
             if mask & 1 == 1 {
@@ -285,7 +357,7 @@ impl Board {
             i += 1;
             mask >>= 1;
         }
-        self.grid.child_at(5, 5).unwrap().set_css_classes(&["cell", "bar"]);
+        true
     }
 
     fn click_input(&mut self, button: &str) {
@@ -295,29 +367,29 @@ impl Board {
     }
 
     fn keyboard_input(&mut self, key: gdk4::Key, modifiers: ModifierType) {
-        let mut key_string = key.to_lower().name().unwrap().to_string();
-        let bits = modifiers.bits();
-        if bits & ModifierType::SHIFT_MASK.bits() != 0 { key_string.push_str("-Shift"); }
-        if bits & ModifierType::ALT_MASK.bits() != 0 { key_string.push_str("-Alt"); }
-        if bits & ModifierType::CONTROL_MASK.bits() != 0 { key_string.push_str("-Ctrl"); }
-        if bits & ModifierType::META_MASK.bits() != 0 { key_string.push_str("-Meta"); }
+        let key_string = modifier_string(key.to_lower().name().unwrap().to_string(), modifiers.bits());
         let command = *self.command_hash.get(&key_string).unwrap_or(&Command::Nop);
         self.do_command(&command);
     }
-    
-    //fn mouse_input(&self, 
-    fn do_command(&mut self, command: &Command) {
-        let succeeded = match command {
+
+    //////////////////////////////////////////////////////////////////
+    //
+    // Command implementations
+    //
+    //////////////////////////////////////////////////////////////////
+    fn do_command(&mut self, command: &Command) -> bool {
+        //
+        match command {
             Command::Left => self.translate_piece(1, 0),
             Command::Right => self.translate_piece(-1, 0),
             Command::Down => self.translate_piece(0, 1),
+            Command::Drop => self.do_drop(),
             Command::RotateRight => self.rotate_piece(Command::RotateRight),
             Command::RotateLeft => self.rotate_piece(Command::RotateLeft),
             Command::Cheat(x) => self.cheat(*x),
+            Command::Resume => self.change_state(State::Running),
+            Command::TogglePause => self.change_state(self.state.toggle()),
             _ => true,
-        };
-        if !succeeded && *command == Command::Down {
-            println!("down failed, piece ended");
         }
     }
 
@@ -333,12 +405,20 @@ impl Board {
         // TODO: check if possible first
         let piece = self.piece;
         let (x, y) = (self.x + dx, self.y + dy);
-        let mut mask = piece.mask(self.orientation);
+        let mask = piece.mask(self.orientation);
         if !self.can_move(mask, x, y) { return false; }
         self.draw_moved_piece(dx, dy, self.orientation);
         true
     }
 
+    fn do_drop(&mut self) -> bool {
+        if !self.dropping && self.do_command(&Command::Down) {
+            self.dropping = true;
+            self.drop_tick();
+        }
+        true
+    }
+    
     // Cheat codes, mainly used for debugging but can be added to "for fun"
     // Initially set 1..8 to select the next piece
     fn cheat(&mut self, x: usize) -> bool {
@@ -346,12 +426,23 @@ impl Board {
         true
     }
     
+    fn change_state(&mut self, mut new_state: State) -> bool {
+        if self.state == State::Finished || new_state == self.state {return true; }
+        self.state = new_state;
+        match self.state {
+            State::Running => self.tick(),
+            State::Finished => (),  // TODO: signal end to all boards
+            State::Paused => (),
+        }
+        true
+    }
+
     // see note above about different coordinate systems. Here is where they crash together.
     // BITMAP has padding of 2 bits on left, right, and bottom to make sure the mask always
     // is fully contained in the bitmap
-    fn can_move(&self, mut mask: u16, x: i32, mut y: i32) -> bool {
+    fn can_move(&self, mut mask: u16, x: i32, y: i32) -> bool {
         let mut row: usize = (y + 2) as usize;
-        for i in 0..4 {
+        while mask != 0 {
             let row_bits: u16 = ((self.bitmap[row] >> x + 2) & 0xf) as u16;
             if row_bits & mask != 0 { return false; }
             mask >>= 4;
@@ -360,6 +451,16 @@ impl Board {
         true
     }
 
+    fn add_piece_to_bitmap(&mut self) {
+        let mut mask = self.piece.mask(self.orientation) as u32;
+        let mut row = self.y as usize;
+        while mask != 0 {
+            self.bitmap[row + 2] |= (mask & 0xf) << (self.x + 2);
+            mask >>= 4;
+            row += 1;
+        }
+    }
+    
     // Moves a piece to a new position. The new position should have already been checked, this
     // assumes the move can be made
     fn draw_moved_piece(&mut self, dx:i32, dy: i32, o1: Orientation) {
@@ -412,8 +513,53 @@ impl Board {
     pub fn set_cell(&self, x: i32, y: i32, piece_name: &String) {
         match self.cell_at(x, y) {
             Some(cell) => if piece_name.eq("empty") {cell.set_css_classes(&["cell"])} else {cell.set_css_classes(&["cell", piece_name])},
-            None => (),
+            None => (),    // if the cell is off the visible board just don't draw it
         };
     }
+
+    fn tick(&self) {
+        let msec = self.delay;
+        unsafe {
+            let p_board = &BOARDS[self.num - 1];
+            let f = move || -> glib::Continue {
+                let mut mut_board = p_board.borrow_mut();
+                if mut_board.dropping {
+                    // if dropping don't stop the clock, but don't move the piece either
+                    return glib::Continue(true);
+                }
+                glib::Continue(mut_board.do_command(&Command::Down) ||      // move down...
+                               mut_board.start_new_piece(false))            // or get new piece
+            };
+            glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
+        }
+    }
+
+    fn drop_tick(&self) {
+        unsafe {
+            let p_board = &BOARDS[self.num - 1];
+            let f = move || -> glib::Continue {
+                let mut mut_board = p_board.borrow_mut();
+                let mut success = true;
+                if !mut_board.do_command(&Command::Down) {
+                    mut_board.dropping = false;
+                    mut_board.start_new_piece(false);
+                    success = false;
+                }
+                glib::Continue(success)
+            };
+            glib::timeout_add_local(core::time::Duration::from_millis(DROP_DELAY_MSEC), f);
+        }
+    }
+
 }
+
+// add modifier suffixes to the key
+fn modifier_string(mut key: String, bits: u32) -> String {
+    if bits & ModifierType::SHIFT_MASK.bits() != 0 { key.push_str("-Shift"); }
+    if bits & ModifierType::ALT_MASK.bits() != 0 { key.push_str("-Alt"); }
+    if bits & ModifierType::CONTROL_MASK.bits() != 0 { key.push_str("-Ctrl"); }
+    if bits & ModifierType::META_MASK.bits() != 0 { key.push_str("-Meta"); }
+    key
+}
+
 
