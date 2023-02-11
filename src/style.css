@@ -6,13 +6,13 @@
   min-width: 25px;
 }
 
-.Bar { background-color: red; }
-.Tee { background-color: green; }
-.Square { background-color: blue; }
-.Zee { background-color: yellow; }
-.ReverseZee { background-color: grey; }
-.El { background-color: purple; }
-.ReverseEl { background-color: pink; }
+.Bar { background-color: #f00; }
+.Tee { background-color: #0f0; }
+.Square { background-color: #00f; }
+.Zee { background-color: #ff0; }
+.ReverseZee { background-color: #f0f; }
+.El { background-color: #0ff; }
+.ReverseEl { background-color: #468; }
 
 .board {
   background-color: white;
@@ -20,3 +20,7 @@
   border-color: black;
 }
 .selected { border-color: red; }
+
+.preview {
+background-color: #ddd;
+}

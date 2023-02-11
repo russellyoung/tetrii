@@ -16,11 +16,9 @@ fn type_of<T>(_: T) -> &'static str {
  */
 
 /* TODO:
- * - timer for drop
  * - add score to boards
  * - modifiers for mouse click?
  * - 2 (multiple?) commands per key
- * - add preview to boards
  * - make main window (overall score, control buttons)
  * - finish implementng commands
  * - custom key assignments in yaml file
@@ -67,10 +65,31 @@ fn type_of<T>(_: T) -> &'static str {
 // of the old position can be ANDed with the bigmask of the new position to find the cells which need
 // to be redrawn.
 //
+//
+// Bitmap
+// Each cell on the board os represented by a bit in the bitmap. It is a vec with entries being a u32
+// word for each row, one mask per row. There are 32 bits in a mask, but in order to keep pieces from
+// going off the board the outside 2 bits on each side and the bottom are set (2 bits because rotating
+// the bar can reac 2 cells off the board, and making the border 2 means there is no problem with overflow.
+// It does mean the maximum width is 28 rather than 32. So the bitmap looks like this:
+//
+//  11000...0011
+//  11000...0011
+//  11000...0011
+//  .
+//  .
+//  .
+//  11000...0011
+//  11111...1111
+//  11111...1111
+
 //////////////////////////////////////////////////////////////////
 
 // ratio between the clock tick rate and the drop clock tick rate
 const DROP_DELAY_SPEEDUP: u64 = 8;
+
+const SS_DROPPING: u16 = 0x1;
+const SS_NEW_PIECE: u16 = 0x2;
 
 // default commands to set up the map. The CHEAT entries can have ad hoc stuff added, the current values
 // set the next piece, which is useful for debugging (and also for getting out of tight spots)
@@ -151,18 +170,19 @@ pub struct Board {
     width:        i32,
     height:       i32,
     window:       gtk::Window,
-    playing_area: gtk::Grid,       
+    playing_area: gtk::Grid,
+    preview:      Option<gtk::Grid>,
     command_hash: HashMap<String, Command>,
     // Following are mutable. I asked on rust-lang and they suggested the approach of making the whole struct mutable
     state:        State,
-    dropping:     bool,           // flag set for when piece is dropping. It could be made a substate of Running, but this is simpler
+    substate:     u16,            // see SS_* consts defined above
     x:            i32,
     y:            i32,
     orientation:  Orientation,
-    score:        u32,
-    piece_count:  [u32; 7],
     piece:        &'static Piece,
     next_piece:   &'static Piece,
+    score:        u32,
+    piece_count:  [u32; 7],
     delay:        u64,            // initial msec between ticks
     bitmap:       Vec<u32>,       // bitmap of board
 }
@@ -217,9 +237,9 @@ impl Piece {
     fn mask(&self, orientation: Orientation) -> u16 {
         self.masks[orientation.offset()]
     }
-    // BIG_MASKis a 5x6 array (fitting in 32 bits) used to map a piece and the rows to its left, right, and bottom
+    // BIG_MASK is a 5x6 array, see intro above
     fn big_mask(&self, orientation: Orientation, dx: i32, dy: i32) -> u32 {
-        let mut big_mask:u32 = 0x0;
+        let mut big_mask: u32 = 0x0;
         let mut mask = self.mask(orientation);
         let mut shift = 1 + dx + 6*dy;
         while mask != 0 {
@@ -241,26 +261,29 @@ impl Board {
         let mut container = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
-        let mut board = Board{num: num,
-                              width: config.width as i32,
-                              height: config.height as i32,
-                              window: gtk::ApplicationWindow::new(app).into(),
-                              playing_area: gtk::Grid::builder().build(),
-                              command_hash: init_command_hash(),
-                              bitmap: vec![0xffffffff; (config.height + 4) as usize],
-                              state: State::Paused,
-                              dropping: false,
-                              delay: 500,
-                              x: 0,
-                              y: 0,
-                              orientation: Orientation::North,
-                              score: 0,
-                              piece_count: [0; 7],
-                              piece: &PIECES[0],     // initial piece is discarded
-                              next_piece: Piece::random(),
+        let mut board = Board{
+            num: num,
+            width: config.width as i32,
+            height: config.height as i32,
+            window: gtk::ApplicationWindow::new(app).into(),
+            playing_area: gtk::Grid::builder().row_homogeneous(true).column_homogeneous(true).build(),
+            preview: None,
+            command_hash: init_command_hash(),
+            bitmap: vec![0xffffffff; (config.height + 4) as usize],
+            state: State::Paused,
+            substate: 0,
+            delay: 500,
+            x: 0,
+            y: 0,
+            orientation: Orientation::North,
+            score: 0,
+            piece_count: [0; 7],
+            piece: &PIECES[0],     // initial piece is discarded
+            next_piece: Piece::random(),
         };
+        board.window.set_title(Some(&["Board ", &board.num.to_string()].concat()));
         if config.preview {
-            container.append(&board.make_preview(config));
+            container.append(board.make_preview(config));
         }
         container.append(board.make_playing_area(config));   // return type is different from the others because Grid already exists
         container.append(&board.make_scoreboard(config));
@@ -268,6 +291,58 @@ impl Board {
         Board::add_handlers(board)
     }
 
+    pub fn show(&self) { self.window.show(); }
+
+    fn make_preview(&mut self, config: &Config) -> &gtk::Grid {
+        let mut grid = gtk::Grid::builder().build();
+        grid.set_halign(gtk::Align::Center);
+        grid.add_css_class("preview");
+        for i in 0..8 {
+            grid.attach(&self.make_cell(), i%4, i/4, 1, 1);
+        }
+        self.preview = Some(grid);
+        &self.preview.as_ref().unwrap()
+    }
+    
+    fn make_scoreboard(&mut self, config: &Config) -> gtk::Grid {
+        gtk::Grid::builder().build()
+    }
+
+    fn make_playing_area(&mut self, config: &Config) -> &gtk::Grid {
+        self.playing_area.set_focusable(true);
+        self.playing_area.add_css_class("board");
+
+        // bitmap is initialized as all 1s, clear all bits representing the playing area
+        let mask = !(((0x1 << config.width) - 1) << 2);
+        for i in 0..self.bitmap.len() - 2 {
+            self.bitmap[i] &= mask;
+        }
+        for x in 0..self.width {
+            for y in 0..self.height {
+                self.playing_area.attach(&self.make_cell(), x, y, 1, 1);
+            }
+        }
+        // allow setting the initial piece, for debugging (probably will be taken out eventually)
+        if config.initial_piece < PIECES.len() {
+            self.next_piece = &PIECES[config.initial_piece];
+        }
+        self.start_new_piece(true);
+        &self.playing_area
+    }        
+
+    // helper function to make a single cell
+    fn make_cell(&self) -> gtk::Box {
+        let cell = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+        let label = gtk::Label::builder()
+            .label("")
+            .build();
+        label.add_css_class("cell");
+        cell.append(&label);
+        cell
+    }
+    
     fn add_handlers(board: Board) -> Rc<RefCell<Board>> {
         // add handlers
         let ref_board = RefCell::new(board);
@@ -322,48 +397,6 @@ impl Board {
         rc_board
     }
 
-    fn make_preview(&mut self, config: &Config) -> gtk::Grid {
-        gtk::Grid::builder().build()
-    }
-    fn make_scoreboard(&mut self, config: &Config) -> gtk::Grid {
-        gtk::Grid::builder().build()
-    }
-    fn make_playing_area(&mut self, config: &Config) -> &gtk::Grid {
-        self.playing_area.set_focusable(true);
-        self.playing_area.add_css_class("board");
-
-        let mask = !(((0x1 << config.width) - 1) << 2);
-        for i in 0..self.bitmap.len() - 2 {
-            self.bitmap[i] &= mask;
-        }
-        // bitmap is a map of the board with 0 for empty spaces and 1 for filled. Initialize it so all bits representing
-        // cells of the bitmap are 0 and all other bits are 1. To avoid having to worry about overflow or underflow there
-        // is a border of at least 2 set bits on the left, right, and bottom of the bitmap. This means that the maximum
-        // allowable width, using a 32-but mask, is 28 columns.
-        // 
-        for row in 0..self.width {
-            for col in 0..self.height {
-                let cell = gtk::Box::builder()
-                    .orientation(gtk::Orientation::Vertical)
-                    .build();
-                let label = gtk::Label::builder()
-                    .label("")
-                    .build();
-                label.add_css_class("cell");
-                cell.append(&label);
-                self.playing_area.attach(&cell, row, col, 1, 1);
-            }
-        }
-        self.window.set_title(Some(&["Board ", &self.num.to_string()].concat()));
-        if config.initial_piece < PIECES.len() {
-            self.next_piece = &PIECES[config.initial_piece];
-        }
-        self.start_new_piece(true);
-        &self.playing_area
-    }        
-        
-    pub fn show(&self) { self.window.show(); }
-
     //////////////////////////////////////////////////////////////////
     //
     // Piece handling
@@ -375,11 +408,15 @@ impl Board {
         // The first time through there is no old piece to record on the bitmap. In subsequent calls the old piece
         // needs to be transferred to the bitmap before loading a new one
         if !initial {
-            self.add_piece_to_bitmap()
+            self.add_piece_to_bitmap();
         }
-        
         self.piece = self.next_piece;
         self.next_piece = Piece::random();
+
+        self.substate |= SS_NEW_PIECE;
+        if self.preview != None {
+            self.draw_preview();
+        }
         self.orientation = Orientation::North;
         (self.x, self.y) = (self.width/2 - 2, -1);
         if !self.can_move(self.piece.mask(self.orientation), self.x, self.y) {
@@ -387,18 +424,7 @@ impl Board {
             return false;
         }
         self.piece_count[self.piece.pos] += 1;
-        let name = self.piece.name.to_string();
-        let mut mask = self.piece.mask(self.orientation);
-        let mut i = 0;
-        while mask != 0 {
-            if mask & 1 == 1 {
-                let row = i / 4;
-                let col = i % 4;
-                self.set_cell(self.x + col, self.y + row, &name);
-            }
-            i += 1;
-            mask >>= 1;
-        }
+        self.draw_moved_piece(0, 0, self.orientation);
         true
     }
 
@@ -410,7 +436,7 @@ impl Board {
 
     fn focus_change(&self, focus_in: bool) {
         if focus_in { self.playing_area.add_css_class("selected"); }
-        else {self.playing_area.remove_css_class("selected");}
+        else { self.playing_area.remove_css_class("selected"); }
     }
 
     fn keyboard_input(&mut self, key: gdk4::Key, modifiers: ModifierType) {
@@ -467,18 +493,16 @@ impl Board {
     }
     
     fn translate_piece(&mut self, dx: i32, dy: i32) -> bool {
-        // TODO: check if possible first
-        let piece = self.piece;
         let (x, y) = (self.x + dx, self.y + dy);
-        let mask = piece.mask(self.orientation);
+        let mask = self.piece.mask(self.orientation);
         if !self.can_move(mask, x, y) { return false; }
         self.draw_moved_piece(dx, dy, self.orientation);
         true
     }
 
     fn do_drop(&mut self) -> bool {
-        if !self.dropping && self.do_command(&Command::Down) {
-            self.dropping = true;
+        if self.substate & SS_DROPPING == 0 && self.do_command(&Command::Down) {
+            self.substate |= SS_DROPPING;
             self.drop_tick();
         }
         true
@@ -532,27 +556,14 @@ impl Board {
         let piece = self.piece;
         let (x0, y0) = (self.x, self.y);
         let (x1, y1) = (x0 + dx, y0 + dy);
-        // clear all cells which do not remain on
-        let big_mask0 = piece.big_mask(self.orientation, 0, 0);
-        let big_mask1 = piece.big_mask(o1, dx, dy);
-        let mut clear_mask = big_mask0 & !big_mask1;
-        let empty = "empty".to_string();
-        let mut i = 0;
-        while clear_mask != 0 {
-            if clear_mask & 1 == 1 {
-                let row = i / 6;
-                let col = i % 6;
-                self.set_cell(x0 + col - 1, y0 + row, &empty);
-            }
-            i += 1;
-            clear_mask >>= 1;
-        }
-        
+
+        // set all cells which were off but will be on
         let name = piece.name.to_string();
-        let big_mask0 = piece.big_mask(self.orientation, -dx, 0);
-        let big_mask1 = piece.big_mask(o1, 0, dy);
-        let mut set_mask = big_mask1 & !big_mask0;
-        i = 0;
+        let mut set_mask = piece.big_mask(o1, 0, dy);
+        if self.substate & SS_NEW_PIECE == 0 {
+            set_mask &= !piece.big_mask(self.orientation, -dx, 0);
+        }
+        let mut i = 0;
         while set_mask != 0 {
             if set_mask & 1 == 1 {
                 let row = i / 6;
@@ -563,6 +574,23 @@ impl Board {
             set_mask >>= 1;
         }
         
+        // clear all cells which do not remain on. If this is a new piece there are no cells to be cleared.
+        if self.substate & SS_NEW_PIECE != 0 {
+            self.substate &= !SS_NEW_PIECE;
+        } else {
+            let mut clear_mask = piece.big_mask(self.orientation, 0, 0) & !piece.big_mask(o1, dx, dy);
+            let empty = "empty".to_string();
+            let mut i = 0;
+            while clear_mask != 0 {
+                if clear_mask & 1 == 1 {
+                    let row = i / 6;
+                    let col = i % 6;
+                    self.set_cell(x0 + col - 1, y0 + row, &empty);
+                }
+                i += 1;
+                clear_mask >>= 1;
+            }
+        }
         (self.x, self.y) = (x1, y1);
         self.orientation = o1;
     }
@@ -571,15 +599,28 @@ impl Board {
     // Drawing the pieces is done by setting css class for widgets in the board.playing_area object. This way I don't need
     // to handle any redrawing, and setting the colors is simple. If drawing turns out to be better then board.playing_area
     // needs to be replaced with a drawing area and these functions need to be redone
-    pub fn cell_at(&self, x: i32, y: i32) -> Option<gtk::Widget> {
+    fn cell_at(&self, x: i32, y: i32) -> Option<gtk::Widget> {
         self.playing_area.child_at(self.width - 1 - x, y)
     }
 
-    pub fn set_cell(&self, x: i32, y: i32, piece_name: &String) {
+    fn set_cell(&self, x: i32, y: i32, piece_name: &String) {
         match self.cell_at(x, y) {
             Some(cell) => if piece_name.eq("empty") {cell.set_css_classes(&["cell"])} else {cell.set_css_classes(&["cell", piece_name])},
             None => (),    // if the cell is off the visible board just don't draw it
         };
+    }
+
+    // All pieces in their North position are contained in rows 1 and 2, so the mask is of the form 0x0**0 and only the
+    // middle 2 quartets are drawn
+    fn draw_preview(&self) {
+        let preview = self.preview.as_ref().unwrap();
+        let mut mask = self.next_piece.mask(Orientation::North) >> 4;
+        let piece_type = &[self.next_piece.name];
+        let empty = &["empty"];
+        for i in 0..8 {
+            preview.child_at(3 - i%4, i/4).unwrap().set_css_classes( if mask & 1 > 0 {piece_type} else {empty});
+            mask >>= 1;
+        }
     }
 
     fn tick(&self) {
@@ -589,7 +630,7 @@ impl Board {
             let f = move || -> glib::Continue {
                 let mut mut_board = p_board.borrow_mut(); 
                 glib::Continue(
-                    if mut_board.dropping { true }                      // continue the timer, but don't move the piece
+                    if mut_board.substate & SS_DROPPING != 0 { true }                      // continue the timer, but don't move the piece
                     else if mut_board.state != State::Running { false } // stop if paused or finished
                     else {
                         mut_board.do_command(&Command::Down) ||         // move down if possible...
@@ -608,7 +649,7 @@ impl Board {
                 let mut mut_board = p_board.borrow_mut();
                 let mut success = true;
                 if !mut_board.do_command(&Command::Down) {
-                    mut_board.dropping = false;
+                    mut_board.substate &= !SS_DROPPING;
                     mut_board.start_new_piece(false);
                     success = false;
                 }
