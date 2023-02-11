@@ -151,11 +151,11 @@ pub struct Board {
     width:        i32,
     height:       i32,
     window:       gtk::Window,
-    grid:         gtk::Grid,
+    playing_area: gtk::Grid,       
     command_hash: HashMap<String, Command>,
     // Following are mutable. I asked on rust-lang and they suggested the approach of making the whole struct mutable
     state:        State,
-    dropping:     bool,       // flag set for when piece is dropping. It could be made a substate of Running, but this is simpler
+    dropping:     bool,           // flag set for when piece is dropping. It could be made a substate of Running, but this is simpler
     x:            i32,
     y:            i32,
     orientation:  Orientation,
@@ -163,8 +163,8 @@ pub struct Board {
     piece_count:  [u32; 7],
     piece:        &'static Piece,
     next_piece:   &'static Piece,
-    delay:        u64,
-    bitmap:       Vec<u32>,
+    delay:        u64,            // initial msec between ticks
+    bitmap:       Vec<u32>,       // bitmap of board
 }
 
 
@@ -238,40 +238,111 @@ impl Piece {
 
 impl Board {
     pub fn new(num: usize, app: &gtk::Application, config: &Config) -> Rc<RefCell<Board>> {
-        let grid = gtk::Grid::builder().build();
-        grid.set_focusable(true);
-        grid.add_css_class("board");
-        
-        let mut bitmap = vec![0xffffffff; (config.height + 4) as usize];
-        let mask = !(((0x1 << config.width) - 1) << 2);
-        for i in 0..bitmap.len() - 2 {
-            bitmap[i] &= mask;
-        }
+        let mut container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
         let mut board = Board{num: num,
                               width: config.width as i32,
                               height: config.height as i32,
                               window: gtk::ApplicationWindow::new(app).into(),
-                              grid: grid,
+                              playing_area: gtk::Grid::builder().build(),
                               command_hash: init_command_hash(),
-                              bitmap: bitmap,
+                              bitmap: vec![0xffffffff; (config.height + 4) as usize],
                               state: State::Paused,
                               dropping: false,
+                              delay: 500,
                               x: 0,
                               y: 0,
                               orientation: Orientation::North,
                               score: 0,
                               piece_count: [0; 7],
                               piece: &PIECES[0],     // initial piece is discarded
-                              delay: 500,
-                              next_piece: if config.initial_piece < PIECES.len() { &PIECES[config.initial_piece]} else { Piece::random() },
+                              next_piece: Piece::random(),
         };
+        if config.preview {
+            container.append(&board.make_preview(config));
+        }
+        container.append(board.make_playing_area(config));   // return type is different from the others because Grid already exists
+        container.append(&board.make_scoreboard(config));
+        board.window.set_child(Some(&container));
+        Board::add_handlers(board)
+    }
+
+    fn add_handlers(board: Board) -> Rc<RefCell<Board>> {
+        // add handlers
+        let ref_board = RefCell::new(board);
+        let rc_board = Rc::new(ref_board);
+        let key_handler = gtk::EventControllerKey::new();
+        rc_board.borrow().playing_area.add_controller(&key_handler);
+        let rc_board_key = Rc::clone(&rc_board);
+        key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
+            rc_board_key.borrow_mut().keyboard_input(key, state);
+            gtk::Inhibit(false)
+        });
+        let focus_handler = gtk::EventControllerFocus::new();
+        let rc_board_focus = Rc::clone(&rc_board);
+        rc_board.borrow().playing_area.add_controller(&focus_handler);
+        focus_handler.connect_contains_focus_notify(move |event| {
+            // this breaks if borrow_mut(), but fortunately mutability is not needed
+            rc_board_focus.borrow().focus_change(event.contains_focus());
+        });
+        /* I'd like to implement this (select on mouse over) but mac doesn't generate the events
+        let enter_handler = gtk::EventControllerFocus::new();
+        let rc_board_enter = Rc::clone(&rc_board);
+        rc_board.borrow().playing_area.add_controller(&enter_handler);
+        enter_handler.connect_contains_focus_notify(move |event| {
+            println!("enter: {}", event.contains_focus());
+            // this breaks if borrow_mut(), but fortunately mutability is not needed
+            if event.contains_focus() {
+                println!("setting it here");
+                rc_board_enter.borrow().window.grab_focus();
+            }
+        });
+         */
+        // Do I really need a different handler for each button to know which one was pressed?
+        // And is there any way to get modifier keys, short of keeping track of the presses?
+        let mouse_handler1 = gtk::GestureClick::builder().button(1).build();
+        let rc_board_click1 = Rc::clone(&rc_board);
+        rc_board.borrow().playing_area.add_controller(&mouse_handler1);
+        mouse_handler1.connect_pressed(move |_, _, _, _ | {
+            rc_board_click1.borrow_mut().click_input("Mouse1");
+        });
+        let mouse_handler2 = gtk::GestureClick::builder().button(2).build();
+        let rc_board_click2 = Rc::clone(&rc_board);
+        rc_board.borrow().playing_area.add_controller(&mouse_handler2);
+        mouse_handler2.connect_pressed(move |_, _, _, _ | {
+            rc_board_click2.borrow_mut().click_input("Mouse2");
+        });
+        let mouse_handler3 = gtk::GestureClick::builder().button(3).build();
+        let rc_board_click3 = Rc::clone(&rc_board);
+        rc_board.borrow().playing_area.add_controller(&mouse_handler3);
+        mouse_handler3.connect_pressed(move |_, _, _, _ | {
+            rc_board_click3.borrow_mut().click_input("Mouse3");
+        });
+        rc_board
+    }
+
+    fn make_preview(&mut self, config: &Config) -> gtk::Grid {
+        gtk::Grid::builder().build()
+    }
+    fn make_scoreboard(&mut self, config: &Config) -> gtk::Grid {
+        gtk::Grid::builder().build()
+    }
+    fn make_playing_area(&mut self, config: &Config) -> &gtk::Grid {
+        self.playing_area.set_focusable(true);
+        self.playing_area.add_css_class("board");
+
+        let mask = !(((0x1 << config.width) - 1) << 2);
+        for i in 0..self.bitmap.len() - 2 {
+            self.bitmap[i] &= mask;
+        }
         // bitmap is a map of the board with 0 for empty spaces and 1 for filled. Initialize it so all bits representing
         // cells of the bitmap are 0 and all other bits are 1. To avoid having to worry about overflow or underflow there
         // is a border of at least 2 set bits on the left, right, and bottom of the bitmap. This means that the maximum
         // allowable width, using a 32-but mask, is 28 columns.
         // 
-        for row in 0..board.width {
-            for col in 0..board.height {
+        for row in 0..self.width {
+            for col in 0..self.height {
                 let cell = gtk::Box::builder()
                     .orientation(gtk::Orientation::Vertical)
                     .build();
@@ -280,46 +351,17 @@ impl Board {
                     .build();
                 label.add_css_class("cell");
                 cell.append(&label);
-                board.grid.attach(&cell, row, col, 1, 1);
+                self.playing_area.attach(&cell, row, col, 1, 1);
             }
         }
-        board.window.set_title(Some(&["Board ", &board.num.to_string()].concat()));
-        board.window.set_child(Some(&board.grid));
-        board.start_new_piece(true);
-
-        // add handlers
-        let ref_board = RefCell::new(board);
-        let rc_board = Rc::new(ref_board);
-        let key_handler = gtk::EventControllerKey::new();
-        rc_board.borrow().grid.add_controller(&key_handler);
-        let rc_board_key = Rc::clone(&rc_board);
-        key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
-            rc_board_key.borrow_mut().keyboard_input(key, state);
-            gtk::Inhibit(false)
-        });
-        // Do I really need a different handler for each button to know which one was pressed?
-        // And is there any way to get modifier keys, short of keeping track of the presses?
-        let mouse_handler1 = gtk::GestureClick::builder().button(1).build();
-        let rc_board_click1 = Rc::clone(&rc_board);
-        rc_board.borrow().grid.add_controller(&mouse_handler1);
-        mouse_handler1.connect_pressed(move |_, _, _, _ | {
-            rc_board_click1.borrow_mut().click_input("Mouse1");
-        });
-        let mouse_handler2 = gtk::GestureClick::builder().button(2).build();
-        let rc_board_click2 = Rc::clone(&rc_board);
-        rc_board.borrow().grid.add_controller(&mouse_handler2);
-        mouse_handler2.connect_pressed(move |_, _, _, _ | {
-            rc_board_click2.borrow_mut().click_input("Mouse2");
-        });
-        let mouse_handler3 = gtk::GestureClick::builder().button(3).build();
-        let rc_board_click3 = Rc::clone(&rc_board);
-        rc_board.borrow().grid.add_controller(&mouse_handler3);
-        mouse_handler3.connect_pressed(move |_, _, _, _ | {
-            rc_board_click3.borrow_mut().click_input("Mouse3");
-        });
-        rc_board
-    }
-
+        self.window.set_title(Some(&["Board ", &self.num.to_string()].concat()));
+        if config.initial_piece < PIECES.len() {
+            self.next_piece = &PIECES[config.initial_piece];
+        }
+        self.start_new_piece(true);
+        &self.playing_area
+    }        
+        
     pub fn show(&self) { self.window.show(); }
 
     //////////////////////////////////////////////////////////////////
@@ -364,6 +406,11 @@ impl Board {
         let command = *self.command_hash.get(button).unwrap_or(&Command::Nop);
         // not sure if I can get modifer keys here
         self.do_command(&command);
+    }
+
+    fn focus_change(&self, focus_in: bool) {
+        if focus_in { self.playing_area.add_css_class("selected"); }
+        else {self.playing_area.remove_css_class("selected");}
     }
 
     fn keyboard_input(&mut self, key: gdk4::Key, modifiers: ModifierType) {
@@ -521,11 +568,11 @@ impl Board {
     }
 
     // lowest level functions
-    // Drawing the pieces is done by setting css class for widgets in the board.grid object. This way I don't need
-    // to handle any redrawing, and setting the colors is simple. If drawing turns out to be better then board.grid
+    // Drawing the pieces is done by setting css class for widgets in the board.playing_area object. This way I don't need
+    // to handle any redrawing, and setting the colors is simple. If drawing turns out to be better then board.playing_area
     // needs to be replaced with a drawing area and these functions need to be redone
     pub fn cell_at(&self, x: i32, y: i32) -> Option<gtk::Widget> {
-        self.grid.child_at(self.width - 1 - x, y)
+        self.playing_area.child_at(self.width - 1 - x, y)
     }
 
     pub fn set_cell(&self, x: i32, y: i32, piece_name: &String) {
@@ -570,7 +617,6 @@ impl Board {
             glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
         }
     }
-
 }
 
 // add modifier suffixes to the key
