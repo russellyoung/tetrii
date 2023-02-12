@@ -13,6 +13,7 @@
 .ReverseZee { background-color: #f0f; }
 .El { background-color: #0ff; }
 .ReverseEl { background-color: #468; }
+.empty {  }
 
 .board {
   background-color: white;
@@ -21,6 +22,6 @@
 }
 .selected { border-color: red; }
 
-.preview {
-background-color: #ddd;
-}
+.preview { background-color: #ddd; }
+
+.scoreboard { font-size: xx-large; }

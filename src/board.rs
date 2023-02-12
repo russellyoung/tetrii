@@ -15,16 +15,6 @@ fn type_of<T>(_: T) -> &'static str {
 }
  */
 
-/* TODO:
- * - add score to boards
- * - modifiers for mouse click?
- * - 2 (multiple?) commands per key
- * - make main window (overall score, control buttons)
- * - finish implementng commands
- * - custom key assignments in yaml file
- * - animation
- */
-
 //////////////////////////////////////////////////////////////////
 //
 // Coordinate systems:
@@ -82,19 +72,73 @@ fn type_of<T>(_: T) -> &'static str {
 //  11000...0011
 //  11111...1111
 //  11111...1111
-
+//
+//
+// PLAYING:
+//
+// There are many configuration options you can use to adjust the game. Controls can be set on the command
+// or in a config file, which by default is ~/.tetrii, but can be changed with a command switch. The
+// command line options can be found by passing the "-h" switch on the command line. (you need to add a
+// "--" switch before it to Rust knows the arguments are not its own). Through these you can control
+// the dimensions, size and number of game boards. The look can also be adjusted by editing or replacing
+// the style.css file in the run directory. This file is needed, the program will not run without it.
+//
+//
+// RULES:
+//
+// Initial drop time is .5 seconds, every 10 rows completed this is multiplied by 0.9. Pieces score points
+// based on their shape and orientation, as set up in the Piece struct. There is a 1 point per layer bonus
+// for dropping, and a bonus of 5*(number of levels filled) when levels are filled. (that is, one level is
+// 5 points, 2 is 20, 3 45, 4 80.
+//
+//
+// TODO:
+//
+// This is not finished. It needs to have a main scoreboard to hold the combined scores and have buttons
+// to start, stop, pause, and quit. THe purpose of the program is for me to learn about Rust, and for that
+// it has already been successful. One of the things I learned was that the overall design is wrong - in
+// other languages I've written this in running separate windows worked fine, in Rust it seems to make more
+// sense to put them in one big window. I also learned that keeping track of integer types is a problem:
+// it is not good to choose whatever seems best for each and then expect them to combine. I have a lot of
+// forced casts which are (I think) all OK, but not particularly clean.
+//
+// The point of that is that I am probably going to rework this with what I've learned to make it a better
+// Rust program, and there is no need to finish all the bells and whistles before starting that.
+//
+// That said, there are a bunch of features that could be added:
+// - first the main control panel, as described above.
+// - custom control keys: I'd like to add an interactive way to do it, but at least I want to add it to
+//   the config file
+// - modifiers for mouse clicks: again, on other platforms being able to use ctrl and shift with the mouse
+//   seemed the most flexible way to play. I have not found how to do that here. (it will be easier if there
+//   is just one window)
+// - Again for mouse control, being able to bind 2 commands to a keystroke is helpful - it lets a click
+//   select a new window and perform a command there. This way each hand could work a different board
+//   without needing to switch them.
+// - Features from other versions: adding some extra pieces with different shapes (even ones that morph as
+//   they are rotated, or require a 720 degree rotation to return to the original state), or starting the
+//   game with random cells filled in and you win by cleaning them all up. But those depend on how much
+//   time I care to spend.
+//
 //////////////////////////////////////////////////////////////////
 
+// initial tick time for each board
+const INITIAL_TICK_MSEC: u64 = 500;
+// factor to use to increase speed as the game progresses
+const TICK_SPEEDUP_RATIO: f64 = 0.9;
 // ratio between the clock tick rate and the drop clock tick rate
 const DROP_DELAY_SPEEDUP: u64 = 8;
 
-const SS_DROPPING: u16 = 0x1;
-const SS_NEW_PIECE: u16 = 0x2;
+// bits in the BOARD.SUBSTATE mask
+const SS_DROPPING:  u16 = 0x1;    // a piece is dropping
+const SS_NEW_PIECE: u16 = 0x2;    // the piece being drawn is new, it has no cells previously set
+const SS_PREVIEW:   u16 = 0x4;    // the PREVIEW option is on
+const SS_FASTER :   u16 = 0x8;    // The tick time has been changed
 
 // default commands to set up the map. The CHEAT entries can have ad hoc stuff added, the current values
 // set the next piece, which is useful for debugging (and also for getting out of tight spots)
 // TODO: allow custom configurations in the config file
-const COMMANDS:[(&str, Command); 20] =
+const COMMANDS:[(&str, Command); 24] =
     [(&"Right",  Command::Right),
      (&"Left",   Command::Left),
      (&"Down",   Command::Down),
@@ -108,13 +152,17 @@ const COMMANDS:[(&str, Command); 20] =
      (&"Mouse1", Command::Left),
      (&"Mouse2", Command::Down),
      (&"Mouse3", Command::Right),
-     (&"1",      Command::Cheat(1)),
-     (&"2",      Command::Cheat(2)),
-     (&"3",      Command::Cheat(3)),
-     (&"4",      Command::Cheat(4)),
-     (&"5",      Command::Cheat(5)),
-     (&"6",      Command::Cheat(6)),
-     (&"7",      Command::Cheat(7)),
+     (&"1",      Command::Cheat(0)),   // force piece
+     (&"2",      Command::Cheat(1)),
+     (&"3",      Command::Cheat(2)),
+     (&"4",      Command::Cheat(3)),
+     (&"5",      Command::Cheat(4)),
+     (&"6",      Command::Cheat(5)),
+     (&"7",      Command::Cheat(6)),
+     (&"b-Ctrl", Command::Cheat(10)),  // print bitmap binary, good for viewing
+     (&"b-Shift", Command::Cheat(11)), // print bitmap hex, can paste into BITARRAY for debugging
+     (&"d-Ctrl", Command::Cheat(12)),  // print Board
+     (&"p-Ctrl", Command::Cheat(13)),  // use fake bitmap: insert bitmap at BITARRAY and recompile
 ];
 
 // builds the command hash from the array definition
@@ -159,34 +207,45 @@ pub struct Piece {
     // to repeat the values until there are 4.
     // (NOTE: other implementations have used circular linked lists to manage this. Listing 4 rotations for
     // each object probably takes less code than handling the different cases individually)
-    points: [u8; 4],
+    points: [u32; 4],
     masks: [u16; 4],
 }
 
 #[derive(Debug, Clone)]
 pub struct Board {
     // immutable
-    num:          usize,      // for ID purpose
-    width:        i32,
-    height:       i32,
-    window:       gtk::Window,
-    playing_area: gtk::Grid,
-    preview:      Option<gtk::Grid>,
-    command_hash: HashMap<String, Command>,
+    num:           usize,      // for ID purpose
+    width:         i32,
+    height:        i32,
+    window:        gtk::Window,
+    playing_area:  gtk::Grid,
+    preview:       gtk::Grid,
+    score_widgets: (gtk::Label, gtk::Label),
+    command_hash:  HashMap<String, Command>,
     // Following are mutable. I asked on rust-lang and they suggested the approach of making the whole struct mutable
-    state:        State,
-    substate:     u16,            // see SS_* consts defined above
-    x:            i32,
-    y:            i32,
-    orientation:  Orientation,
-    piece:        &'static Piece,
-    next_piece:   &'static Piece,
-    score:        u32,
-    piece_count:  [u32; 7],
-    delay:        u64,            // initial msec between ticks
-    bitmap:       Vec<u32>,       // bitmap of board
+    state:         State,
+    substate:      u16,            // see SS_* consts defined above
+    x:             i32,
+    y:             i32,
+    orientation:   Orientation,
+    piece:         (&'static Piece, &'static Piece),  // (current piece, next piece)
+    score:         (u32, u32),     // points and levels
+    piece_count:   [u32; 7],
+    delay:         u64,            // initial msec between ticks
+    bitmap:        Vec<u32>,       // bitmap of board
 }
 
+impl Command {
+    // which commands are enabled in PAUSED state
+    fn always(&self) -> bool {
+        match self {
+            Command::TogglePause => true,
+            Command::Resume => true,
+            Command::Cheat(_) => true,
+            _ => false
+        }
+    }
+}
 
 impl Orientation {
     pub fn rotate(&self, command: Command) -> Orientation {
@@ -230,7 +289,7 @@ impl State {
 }
 
 impl Piece {
-    fn points(&self, orientation: Orientation) -> u8 {
+    fn points(&self, orientation: Orientation) -> u32 {
         self.points[orientation.offset()]
     }
     // MASK is a u16 value interpreted as 4 lines of length 4 bits. This can encode all rotations of the pieces.
@@ -258,30 +317,30 @@ impl Piece {
 
 impl Board {
     pub fn new(num: usize, app: &gtk::Application, config: &Config) -> Rc<RefCell<Board>> {
-        let mut container = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .build();
         let mut board = Board{
             num: num,
             width: config.width as i32,
             height: config.height as i32,
             window: gtk::ApplicationWindow::new(app).into(),
             playing_area: gtk::Grid::builder().row_homogeneous(true).column_homogeneous(true).build(),
-            preview: None,
+            preview: gtk::Grid::builder().build(),
+            score_widgets: (gtk::Label::builder().label("0").build(), gtk::Label::builder().label("0").build()),
             command_hash: init_command_hash(),
             bitmap: vec![0xffffffff; (config.height + 4) as usize],
             state: State::Paused,
-            substate: 0,
-            delay: 500,
+            substate: 0x0,
+            delay: INITIAL_TICK_MSEC,
             x: 0,
             y: 0,
             orientation: Orientation::North,
-            score: 0,
+            score: (0, 0),
             piece_count: [0; 7],
-            piece: &PIECES[0],     // initial piece is discarded
-            next_piece: Piece::random(),
+            piece: (&PIECES[0], Piece::random()),     // initial piece is discarded
         };
         board.window.set_title(Some(&["Board ", &board.num.to_string()].concat()));
+        let mut container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
         if config.preview {
             container.append(board.make_preview(config));
         }
@@ -294,18 +353,23 @@ impl Board {
     pub fn show(&self) { self.window.show(); }
 
     fn make_preview(&mut self, config: &Config) -> &gtk::Grid {
-        let mut grid = gtk::Grid::builder().build();
-        grid.set_halign(gtk::Align::Center);
-        grid.add_css_class("preview");
-        for i in 0..8 {
-            grid.attach(&self.make_cell(), i%4, i/4, 1, 1);
+        self.substate |= SS_PREVIEW;
+        self.preview.set_halign(gtk::Align::Center);
+        self.preview.add_css_class("preview");
+        for i in 0..8 {   // preview pane is 4x2
+            self.preview.attach(&self.make_cell(), i%4, i/4, 1, 1);
         }
-        self.preview = Some(grid);
-        &self.preview.as_ref().unwrap()
+        &self.preview
     }
     
-    fn make_scoreboard(&mut self, config: &Config) -> gtk::Grid {
-        gtk::Grid::builder().build()
+    fn make_scoreboard(&mut self, config: &Config) -> gtk::Box {
+        let mut scoreboard = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).build();
+        scoreboard.append(&gtk::Label::builder().label("Score: ").build());
+        scoreboard.append(&self.score_widgets.0);
+        scoreboard.append(&gtk::Label::builder().label("   Levels: ").build());
+        scoreboard.append(&self.score_widgets.1);
+        scoreboard.add_css_class("scoreboard");
+        scoreboard
     }
 
     fn make_playing_area(&mut self, config: &Config) -> &gtk::Grid {
@@ -324,7 +388,7 @@ impl Board {
         }
         // allow setting the initial piece, for debugging (probably will be taken out eventually)
         if config.initial_piece < PIECES.len() {
-            self.next_piece = &PIECES[config.initial_piece];
+            self.piece.1 = &PIECES[config.initial_piece];
         }
         self.start_new_piece(true);
         &self.playing_area
@@ -397,6 +461,11 @@ impl Board {
         rc_board
     }
 
+    fn update_score(&self) {
+        self.score_widgets.0.set_text(&self.score.0.to_string());
+        self.score_widgets.1.set_text(&self.score.1.to_string());
+    }
+    
     //////////////////////////////////////////////////////////////////
     //
     // Piece handling
@@ -409,23 +478,164 @@ impl Board {
         // needs to be transferred to the bitmap before loading a new one
         if !initial {
             self.add_piece_to_bitmap();
+            self.score.0 += self.piece.0.points(self.orientation) + self.completed_lines();
+            self.update_score();
         }
-        self.piece = self.next_piece;
-        self.next_piece = Piece::random();
+        self.piece.0 = self.piece.1;
+        self.piece.1 = Piece::random();
 
         self.substate |= SS_NEW_PIECE;
-        if self.preview != None {
+        if self.substate & SS_PREVIEW > 0 {
             self.draw_preview();
         }
         self.orientation = Orientation::North;
         (self.x, self.y) = (self.width/2 - 2, -1);
-        if !self.can_move(self.piece.mask(self.orientation), self.x, self.y) {
+        if !self.can_move(self.piece.0.mask(self.orientation), self.x, self.y) {
             self.change_state(State::Finished);
             return false;
         }
-        self.piece_count[self.piece.pos] += 1;
+        self.piece_count[self.piece.0.pos] += 1;
         self.draw_moved_piece(0, 0, self.orientation);
         true
+    }
+
+    fn completed_lines(&mut self) -> u32 {
+        let mut cleared_lines = 0;
+        let len = self.bitmap.len();
+        let mut i = self.bitmap.len() - 3;   // start from the bottom of the board (skip over 2 rows of set bits)
+        while i >= 2 {                       // and ignore the extra 2 lines above the visible board
+            if self.bitmap[i] == 0xffffffff {
+                self.remove_row((i - 2) as i32);  // change from bitmap coords to board coords
+                cleared_lines += 1;
+            } else {
+                i -= 1;
+            }
+        }
+        self.score.1 += cleared_lines;
+        // completion bonus: 5 times completed lines squared (max of 100 pts)
+        cleared_lines*cleared_lines*5
+    }
+        
+    fn remove_row(&mut self, row: i32) {
+        // move down all cells above this row
+        for y in (0..row + 1).rev() {
+            for x in 0..self.width {
+                let lc = self.get_cell_color(x, y);
+                let upper_color = self.get_cell_color(x, y - 1);
+                if upper_color != self.get_cell_color(x, y) {
+                    self.set_cell_color(x, y, &upper_color);
+                }
+            }
+        }
+        // now update the bitmap by removing the completed row and adding an empty one on top
+        self.bitmap.remove((row + 2) as usize);
+        let new_row_mask:u32 = 0xffffffff & !(((1 << self.width) - 1) << 2);  // mask is -1 with the bits representing the playing area cleared
+        self.bitmap.insert(2, new_row_mask);
+        
+    }
+    // Moves a piece to a new position. The new position should have already been checked, this
+    // assumes the move can be made
+    fn draw_moved_piece(&mut self, dx:i32, dy: i32, o1: Orientation) {
+        let piece = self.piece.0;
+        let (x0, y0) = (self.x, self.y);
+        let (x1, y1) = (x0 + dx, y0 + dy);
+
+        // set all cells which were off but will be on
+        let name = piece.name;
+        let mut set_mask = piece.big_mask(o1, 0, dy);
+        if self.substate & SS_NEW_PIECE == 0 {
+            set_mask &= !piece.big_mask(self.orientation, -dx, 0);
+        }
+        let mut i = 0;
+        while set_mask != 0 {
+            if set_mask & 1 == 1 {
+                let row = i / 6;
+                let col = i % 6;
+                self.set_cell_color(x1 + col - 1, y1 + row - dy, name);
+            }
+            i += 1;
+            set_mask >>= 1;
+        }
+        
+        // clear all cells which do not remain on. If this is a new piece there are no cells to be cleared.
+        if self.substate & SS_NEW_PIECE != 0 {
+            self.substate &= !SS_NEW_PIECE;
+        } else {
+            let mut clear_mask = piece.big_mask(self.orientation, 0, 0) & !piece.big_mask(o1, dx, dy);
+            let mut i = 0;
+            while clear_mask != 0 {
+                if clear_mask & 1 == 1 {
+                    let row = i / 6;
+                    let col = i % 6;
+                    self.set_cell_color(x0 + col - 1, y0 + row, "empty");
+                }
+                i += 1;
+                clear_mask >>= 1;
+            }
+        }
+        (self.x, self.y) = (x1, y1);
+        self.orientation = o1;
+    }
+
+    // lowest level functions
+    // Drawing the pieces is done by setting css class for widgets in the board.playing_area object. This way I don't need
+    // to handle any redrawing, and setting the colors is simple. If drawing turns out to be better then board.playing_area
+    // needs to be replaced with a drawing area and these functions need to be redone
+    fn cell_at(&self, x: i32, y: i32) -> Option<gtk::Widget> {
+        self.playing_area.child_at(self.width - 1 - x, y)
+    }
+
+    fn set_cell_color(&self, x: i32, y: i32, piece_name: &str) {
+        match self.cell_at(x, y) {
+            Some(cell) => cell.set_css_classes(&["cell", piece_name]),
+            None => (),    // if the cell is off the visible board just don't draw it
+        };
+    }
+
+    // all cells have class Cell, any with contents also have the class name of the piece. Currently I am not using the class
+    // Empty, but there is no harm in returning it - maybe it can be used in the future.
+    fn get_cell_color(&self, x: i32, y: i32) -> String {
+        let cell_opt = self.cell_at(x, y);
+        if cell_opt == None { return "empty".to_string(); }
+        let classes = cell_opt.unwrap().css_classes();
+        if classes.len() < 2 {"empty".to_string()}
+        else if classes[0] == "cell" {classes[1].to_string()}
+        else {classes[0].to_string()}
+    }
+
+    // All pieces in their North position are contained in rows 1 and 2, so the mask is of the form 0x0**0 and only the
+    // middle 2 quartets are drawn
+    fn draw_preview(&self) {
+        let mut mask = self.piece.1.mask(Orientation::North) >> 4;
+        let piece_type = &[self.piece.1.name];
+        let empty = &["empty"];
+        for i in 0..8 {
+            self.preview.child_at(3 - i%4, i/4).unwrap().set_css_classes( if mask & 1 > 0 {piece_type} else {empty});
+            mask >>= 1;
+        }
+    }
+
+    //////////////////////////////////////////////////////////////////
+    //
+    // Command implementations
+    //
+    //////////////////////////////////////////////////////////////////
+    fn do_command(&mut self, command: &Command) -> bool {
+        if self.state == State::Running || command.always() {
+            match command {
+                Command::Left        => self.translate_piece(1, 0),
+                Command::Right       => self.translate_piece(-1, 0),
+                Command::Down        => self.translate_piece(0, 1),
+                Command::Drop        => self.do_drop(),
+                Command::RotateRight => self.rotate_piece(Command::RotateRight),
+                Command::RotateLeft  => self.rotate_piece(Command::RotateLeft),
+                Command::Cheat(x)    => self.cheat(*x),
+                Command::Resume      => self.control_all(State::Running),
+                Command::Pause       => self.control_all(State::Paused),
+                Command::TogglePause => self.control_all(self.state.toggle()),
+                _ => true,
+            }
+        } else { true }
     }
 
     fn click_input(&mut self, button: &str) {
@@ -445,31 +655,6 @@ impl Board {
         self.do_command(&command);
     }
 
-    //////////////////////////////////////////////////////////////////
-    //
-    // Command implementations
-    //
-    //////////////////////////////////////////////////////////////////
-    fn do_command(&mut self, command: &Command) -> bool {
-        if self.state == State::Running || command == &Command::TogglePause || command == &Command::Resume {
-            match command {
-                Command::Left => self.translate_piece(1, 0),
-                Command::Right => self.translate_piece(-1, 0),
-                Command::Down => self.translate_piece(0, 1),
-                Command::Drop => self.do_drop(),
-                Command::RotateRight => self.rotate_piece(Command::RotateRight),
-                Command::RotateLeft => self.rotate_piece(Command::RotateLeft),
-                Command::Cheat(x) => self.cheat(*x),
-                Command::Resume => self.control_all(State::Running),
-                Command::Pause => self.control_all(State::Paused),
-                Command::TogglePause => self.control_all(self.state.toggle()),
-                _ => true,
-            }
-        } else {
-            true
-        }
-    }
-
     fn control_all(&mut self, new_state: State, ) -> bool {
         // This accesses all the boards. The problem is the current one is already owned as mut so its pointer in
         // BOARDS cannot be referenced. It is, however, available as SELF, so it gets handled differently.
@@ -482,11 +667,10 @@ impl Board {
         }
         true
     }
-
     
     fn rotate_piece(&mut self, rotate: Command) -> bool {
         let orientation = self.orientation.rotate(rotate);
-        let mask = self.piece.mask(orientation);
+        let mask = self.piece.0.mask(orientation);
         if !self.can_move(mask, self.x, self.y) { return false; }
         self.draw_moved_piece(0, 0, orientation);
         true
@@ -494,7 +678,7 @@ impl Board {
     
     fn translate_piece(&mut self, dx: i32, dy: i32) -> bool {
         let (x, y) = (self.x + dx, self.y + dy);
-        let mask = self.piece.mask(self.orientation);
+        let mask = self.piece.0.mask(self.orientation);
         if !self.can_move(mask, x, y) { return false; }
         self.draw_moved_piece(dx, dy, self.orientation);
         true
@@ -509,9 +693,20 @@ impl Board {
     }
     
     // Cheat codes, mainly used for debugging but can be added to "for fun"
-    // Initially set 1..8 to select the next piece
-    fn cheat(&mut self, x: usize) -> bool {
-        self.next_piece = &PIECES[x - 1];
+    fn cheat(&mut self, cheat: usize) -> bool {
+        match cheat {
+            // 0..8 to select the next piece
+            0..= 7 => self.piece.1 = &PIECES[cheat],
+            // print out bitmap in binary
+            10 => self.bitmap.iter().for_each(|x| { println!("{:032b}", x); }),
+            // print out bitmap in hex (to be used with BITARRAY)
+            11 => self.bitmap.iter().for_each(|x| { println!("0X{:X},", x); }),
+            // print the whols Board struct
+            12 => println!("{:?}", self),
+            // use the bitmap in BITARRAY to replace the current array (used for debugging)
+            13 => self.init_bitmap_to(&BITARRAY),
+            _ => println!("unrecognized cheat code"),
+        }
         true
     }
     
@@ -541,7 +736,7 @@ impl Board {
     }
 
     fn add_piece_to_bitmap(&mut self) {
-        let mut mask = self.piece.mask(self.orientation) as u32;
+        let mut mask = self.piece.0.mask(self.orientation) as u32;
         let mut row = self.y as usize;
         while mask != 0 {
             self.bitmap[row + 2] |= (mask & 0xf) << (self.x + 2);
@@ -550,79 +745,6 @@ impl Board {
         }
     }
     
-    // Moves a piece to a new position. The new position should have already been checked, this
-    // assumes the move can be made
-    fn draw_moved_piece(&mut self, dx:i32, dy: i32, o1: Orientation) {
-        let piece = self.piece;
-        let (x0, y0) = (self.x, self.y);
-        let (x1, y1) = (x0 + dx, y0 + dy);
-
-        // set all cells which were off but will be on
-        let name = piece.name.to_string();
-        let mut set_mask = piece.big_mask(o1, 0, dy);
-        if self.substate & SS_NEW_PIECE == 0 {
-            set_mask &= !piece.big_mask(self.orientation, -dx, 0);
-        }
-        let mut i = 0;
-        while set_mask != 0 {
-            if set_mask & 1 == 1 {
-                let row = i / 6;
-                let col = i % 6;
-                self.set_cell(x1 + col - 1, y1 + row - dy, &name);
-            }
-            i += 1;
-            set_mask >>= 1;
-        }
-        
-        // clear all cells which do not remain on. If this is a new piece there are no cells to be cleared.
-        if self.substate & SS_NEW_PIECE != 0 {
-            self.substate &= !SS_NEW_PIECE;
-        } else {
-            let mut clear_mask = piece.big_mask(self.orientation, 0, 0) & !piece.big_mask(o1, dx, dy);
-            let empty = "empty".to_string();
-            let mut i = 0;
-            while clear_mask != 0 {
-                if clear_mask & 1 == 1 {
-                    let row = i / 6;
-                    let col = i % 6;
-                    self.set_cell(x0 + col - 1, y0 + row, &empty);
-                }
-                i += 1;
-                clear_mask >>= 1;
-            }
-        }
-        (self.x, self.y) = (x1, y1);
-        self.orientation = o1;
-    }
-
-    // lowest level functions
-    // Drawing the pieces is done by setting css class for widgets in the board.playing_area object. This way I don't need
-    // to handle any redrawing, and setting the colors is simple. If drawing turns out to be better then board.playing_area
-    // needs to be replaced with a drawing area and these functions need to be redone
-    fn cell_at(&self, x: i32, y: i32) -> Option<gtk::Widget> {
-        self.playing_area.child_at(self.width - 1 - x, y)
-    }
-
-    fn set_cell(&self, x: i32, y: i32, piece_name: &String) {
-        match self.cell_at(x, y) {
-            Some(cell) => if piece_name.eq("empty") {cell.set_css_classes(&["cell"])} else {cell.set_css_classes(&["cell", piece_name])},
-            None => (),    // if the cell is off the visible board just don't draw it
-        };
-    }
-
-    // All pieces in their North position are contained in rows 1 and 2, so the mask is of the form 0x0**0 and only the
-    // middle 2 quartets are drawn
-    fn draw_preview(&self) {
-        let preview = self.preview.as_ref().unwrap();
-        let mut mask = self.next_piece.mask(Orientation::North) >> 4;
-        let piece_type = &[self.next_piece.name];
-        let empty = &["empty"];
-        for i in 0..8 {
-            preview.child_at(3 - i%4, i/4).unwrap().set_css_classes( if mask & 1 > 0 {piece_type} else {empty});
-            mask >>= 1;
-        }
-    }
-
     fn tick(&self) {
         let msec = self.delay;
         unsafe {
@@ -647,6 +769,7 @@ impl Board {
             let p_board = &BOARDS[self.num - 1];
             let f = move || -> glib::Continue {
                 let mut mut_board = p_board.borrow_mut();
+                mut_board.score.0 += 1;     // drop bonus
                 let mut success = true;
                 if !mut_board.do_command(&Command::Down) {
                     mut_board.substate &= !SS_DROPPING;
@@ -658,8 +781,49 @@ impl Board {
             glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
         }
     }
+
+    // debugging function: set BITARRAY to reconstruct position
+    fn init_bitmap_to(&mut self, array: &[u32]) {
+        self.bitmap = array.to_vec();
+        for y in 2..self.height + 2 {
+            let mut bit = 0x1u32 << 2;     // skip the first 2 edge bits
+            for x in 0..self.width {
+                if bit & self.bitmap[y as usize] != 0 {
+                    self.set_cell_color(x, y - 2, &PIECES[(y as usize)%PIECES.len()].name);   // rows will be the same color
+                }
+                bit <<= 1;
+            }
+        }
+    }
 }
 
+// set this up and use with init_bitmap_to() for debugging special cases (get data from cheat 11)
+const BITARRAY: [u32; 24] = [
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFF003,
+    0xFFFFFFF7,
+    0xFFFFFFF7,
+    0xFFFFFFF7,
+    0xFFFFFFF7,
+    0xFFFFFFFF,
+    0xFFFFFFFF,
+];
 // add modifier suffixes to the key
 fn modifier_string(mut key: String, bits: u32) -> String {
     if bits & ModifierType::SHIFT_MASK.bits() != 0 { key.push_str("-Shift"); }
