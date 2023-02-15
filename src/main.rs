@@ -1,46 +1,27 @@
+#![allow(unused)]
 // TODO: implement cell_size
 mod board;
 mod config;
+mod controller;
 
 use config::Config;
 use board::Board;
-use std::fs;
+use crate::controller::Controller;
 use gtk::prelude::*;
-use gtk::{CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION};
-use gtk::gdk::Display;
-
-const APP_ID: &str = "com.young-0.tetrii.rust";
+use std::cell::RefCell;
+use std::rc::Rc;
 
 fn main() {
     let config = Config::build_config();
-    let app = gtk::Application::new( Some(APP_ID), Default::default(), );
     gtk::init().expect("Error initializing gtk");
-    load_css(&config.style);     // needs app to be active before this can be done
-
-    app.connect_activate( move |app| { build_ui(app, &config); });
-
+    let controller_rc = Controller::new(config);
+    let controller_rc_activate = Rc::clone(&controller_rc);
+    let controller = controller_rc.borrow();
+    controller.app.connect_activate(move |_app| controller_rc_activate.borrow().build_ui());
     let empty: Vec<String> = vec![];  // thanks to stackoverflow, I learned EMPTY is needed to keep GTK from interpreting the command line flags
-    app.run_with_args(&empty);
+    controller.app.run_with_args(&empty);
 }
 
-// loads the CSS file, exits with error message if ti can't be found. The program will not work at all without proper CSS
-fn load_css(filename: &String) {
-    let provider = CssProvider::new();
-    let css_data = fs::read(filename).expect("could not find CSS file");
-    provider.load_from_data(&css_data);
-    StyleContext::add_provider_for_display(
-        &Display::default().expect("Could not connect to a display."),
-        &provider,
-        STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-}
-
-fn build_ui(app: &gtk::Application, config: &Config) {
-    unsafe {   // App is single threaded, there won't be any problem here. 
-        for i in 0..config.boards as usize {
-            board::BOARDS.push(Board::new(i + 1, app, config));
-        }
-        //    boards.iter().for_each(|b| { b.borrow().show(); });
-        board::BOARDS.iter().for_each(|b| { b.borrow().show(); });
-    }
+fn build_ui(controller: &Controller) {
+    controller.build_ui();
 }

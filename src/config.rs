@@ -28,7 +28,7 @@ const WIDTH_DEFAULT:    u16 = 10;
 const HEIGHT_DEFAULT:   u16 = 20;
 const CELLSIZE_DEFAULT: u16 = 20;
 const DELAY_DEFAULT:    f64 = 0.05;
-const EXTENDED_DEFAULT: f64 = 0.03;
+//const EXTENDED_DEFAULT: f64 = 0.03;
 const PREVIEW_DEFAULT:  bool = true;
 
 #[derive(Parser, Debug)]
@@ -44,16 +44,16 @@ pub struct Config {
     pub cell_size: u16,
     #[clap(short, long, default_value_t = DELAY_DEFAULT)]
     pub delay: f64,
-    #[clap(short, long, default_value_t = EXTENDED_DEFAULT)]
-    pub extended_chance: f64,
+//    #[clap(short, long, default_value_t = EXTENDED_DEFAULT)]
+//    pub extended_chance: f64,
     #[clap(short, long, default_value_t = PREVIEW_DEFAULT)]
     pub preview: bool,
     #[clap(short, long, default_value_t = String::from("~/.tetrii"))]
-    config_file: String,
+    pub config_file: String,
     #[clap(short, long, default_value_t = String::from("style.css"))]
     pub style: String,
-    #[clap(short, long, default_value_t = 999)]
-    pub initial_piece: usize,
+//    #[clap(short, long, default_value_t = 999)]
+//    pub initial_piece: usize,
 }
 
 // Config is the configuration used for the game. It is immutable once fully initialized.
@@ -98,9 +98,9 @@ struct ConfigOptions {
     Height:         Option<u16>,
     CellSize:       Option<u16>,
     Delay:          Option<f64>,
-    ExtendedChance: Option<f64>,
+//    ExtendedChance: Option<f64>,
     Preview:        Option<bool>,
-    InitialPiece:   Option<usize>,
+//    InitialPiece:   Option<usize>,
     Style:          Option<String>,
 }
 
@@ -113,9 +113,9 @@ impl ConfigOptions {
                        Height:         Some(config.height),
                        CellSize:       Some(config.cell_size),
                        Delay:          Some(config.delay),
-                       ExtendedChance: Some(config.extended_chance),
+//                       ExtendedChance: Some(config.extended_chance),
                        Preview:        Some(config.preview),
-                       InitialPiece:   Some(config.initial_piece),
+//                       InitialPiece:   Some(config.initial_piece),
                        Style:          Some(config.style.to_string()),
         }
     }
@@ -170,7 +170,7 @@ impl ConfigOptions {
                     "-H" | "--height"          => yaml_options.Height         = None,
                     "-C" | "--cell_size"       => yaml_options.CellSize       = None,
                     "-d" | "--delay"           => yaml_options.Delay          = None,
-                    "-e" | "--extended_chance" => yaml_options.ExtendedChance = None,
+//                    "-e" | "--extended_chance" => yaml_options.ExtendedChance = None,
                     "-p" | "--preview"         => yaml_options.Preview        = None,
                     "-s" | "--style"           => yaml_options.Style          = None,
                     _                          => (),
@@ -181,9 +181,9 @@ impl ConfigOptions {
             if yaml_options.Height.is_some()         { config.height          = yaml_options.Height.unwrap(); }
             if yaml_options.CellSize.is_some()       { config.cell_size       = yaml_options.CellSize.unwrap(); }
             if yaml_options.Delay.is_some()          { config.delay           = yaml_options.Delay.unwrap(); }
-            if yaml_options.ExtendedChance.is_some() { config.extended_chance = yaml_options.ExtendedChance.unwrap(); }
+//            if yaml_options.ExtendedChance.is_some() { config.extended_chance = yaml_options.ExtendedChance.unwrap(); }
             if yaml_options.Preview.is_some()        { config.preview         = yaml_options.Preview.unwrap(); }
-            if yaml_options.InitialPiece.is_some()   { config.initial_piece   = yaml_options.InitialPiece.unwrap(); }
+//            if yaml_options.InitialPiece.is_some()   { config.initial_piece   = yaml_options.InitialPiece.unwrap(); }
             if yaml_options.Style.is_some()          { config.style           = expand_filename(&yaml_options.Style.unwrap()); }
         }
     }

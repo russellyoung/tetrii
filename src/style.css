@@ -20,7 +20,7 @@
   border: solid 5px;
   border-color: black;
 }
-.selected { border-color: red; }
+.board:focus { border-color: red; }
 
 .preview { background-color: #ddd; }
 

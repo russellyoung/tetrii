@@ -1,8 +1,10 @@
 #![allow(unused)]
 use crate::Config;
+use crate::Controller;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::HashMap;
+use std::fmt;
 
 use fastrand;
 use gdk4::ModifierType;
@@ -211,9 +213,10 @@ pub struct Piece {
     masks: [u16; 4],
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Board {
     // immutable
+    env_rc:        Rc<RefCell<Controller>>,
     num:           usize,      // for ID purpose
     width:         i32,
     height:        i32,
@@ -316,17 +319,22 @@ impl Piece {
 }
 
 impl Board {
-    pub fn new(num: usize, app: &gtk::Application, config: &Config) -> Rc<RefCell<Board>> {
+//    fn env(&self) -> &Controller { &self.env_rc.borrow() }
+
+    pub fn new_ref(num: usize, env_rc: Rc<RefCell<Controller>>) -> Rc<RefCell<Board>> {
+        let env_clone  = Rc::clone(&env_rc);
+        let env2 = env_clone.borrow();
         let mut board = Board{
+            env_rc: env_rc,
             num: num,
-            width: config.width as i32,
-            height: config.height as i32,
-            window: gtk::ApplicationWindow::new(app).into(),
+            width: env2.prop_u16("width") as i32,
+            height: env2.prop_u16("height") as i32,
+            window: gtk::ApplicationWindow::new(&env2.app).into(),
             playing_area: gtk::Grid::builder().row_homogeneous(true).column_homogeneous(true).build(),
             preview: gtk::Grid::builder().build(),
             score_widgets: (gtk::Label::builder().label("0").build(), gtk::Label::builder().label("0").build()),
             command_hash: init_command_hash(),
-            bitmap: vec![0xffffffff; (config.height + 4) as usize],
+            bitmap: vec![0xffffffff; (env2.prop_u16("height") + 4) as usize],
             state: State::Paused,
             substate: 0x0,
             delay: INITIAL_TICK_MSEC,
@@ -341,18 +349,18 @@ impl Board {
         let mut container = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
-        if config.preview {
-            container.append(board.make_preview(config));
+        if env2.prop_bool("preview") {
+            container.append(board.make_preview());
         }
-        container.append(board.make_playing_area(config));   // return type is different from the others because Grid already exists
-        container.append(&board.make_scoreboard(config));
+        container.append(board.make_playing_area());   // return type is different from the others because Grid already exists
+        container.append(&board.make_scoreboard());
         board.window.set_child(Some(&container));
         Board::add_handlers(board)
     }
 
     pub fn show(&self) { self.window.show(); }
 
-    fn make_preview(&mut self, config: &Config) -> &gtk::Grid {
+    fn make_preview(&mut self) -> &gtk::Grid {
         self.substate |= SS_PREVIEW;
         self.preview.set_halign(gtk::Align::Center);
         self.preview.add_css_class("preview");
@@ -362,7 +370,7 @@ impl Board {
         &self.preview
     }
     
-    fn make_scoreboard(&mut self, config: &Config) -> gtk::Box {
+    fn make_scoreboard(&mut self) -> gtk::Box {
         let mut scoreboard = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).build();
         scoreboard.append(&gtk::Label::builder().label("Score: ").build());
         scoreboard.append(&self.score_widgets.0);
@@ -372,12 +380,12 @@ impl Board {
         scoreboard
     }
 
-    fn make_playing_area(&mut self, config: &Config) -> &gtk::Grid {
+    fn make_playing_area(&mut self) -> &gtk::Grid {
         self.playing_area.set_focusable(true);
         self.playing_area.add_css_class("board");
 
         // bitmap is initialized as all 1s, clear all bits representing the playing area
-        let mask = !(((0x1 << config.width) - 1) << 2);
+        let mask = !(((0x1 << self.width) - 1) << 2);
         for i in 0..self.bitmap.len() - 2 {
             self.bitmap[i] &= mask;
         }
@@ -385,10 +393,6 @@ impl Board {
             for y in 0..self.height {
                 self.playing_area.attach(&self.make_cell(), x, y, 1, 1);
             }
-        }
-        // allow setting the initial piece, for debugging (probably will be taken out eventually)
-        if config.initial_piece < PIECES.len() {
-            self.piece.1 = &PIECES[config.initial_piece];
         }
         self.start_new_piece(true);
         &self.playing_area
@@ -409,22 +413,24 @@ impl Board {
     
     fn add_handlers(board: Board) -> Rc<RefCell<Board>> {
         // add handlers
-        let ref_board = RefCell::new(board);
-        let rc_board = Rc::new(ref_board);
+        let board_ref = RefCell::new(board);
+        let board_rc = Rc::new(board_ref);
         let key_handler = gtk::EventControllerKey::new();
-        rc_board.borrow().playing_area.add_controller(&key_handler);
-        let rc_board_key = Rc::clone(&rc_board);
+        board_rc.borrow().playing_area.add_controller(&key_handler);
+        let board_key_rc = Rc::clone(&board_rc);
         key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
-            rc_board_key.borrow_mut().keyboard_input(key, state);
+            board_key_rc.borrow_mut().keyboard_input(key, state);
             gtk::Inhibit(false)
         });
+        /*
         let focus_handler = gtk::EventControllerFocus::new();
-        let rc_board_focus = Rc::clone(&rc_board);
-        rc_board.borrow().playing_area.add_controller(&focus_handler);
+        let board_focus_rc = Rc::clone(&board_rc);
+        board_rc.borrow().playing_area.add_controller(&focus_handler);
         focus_handler.connect_contains_focus_notify(move |event| {
             // this breaks if borrow_mut(), but fortunately mutability is not needed
-            rc_board_focus.borrow().focus_change(event.contains_focus());
+            board_focus_rc.borrow().focus_change(event.contains_focus());
         });
+         */
         /* I'd like to implement this (select on mouse over) but mac doesn't generate the events
         let enter_handler = gtk::EventControllerFocus::new();
         let rc_board_enter = Rc::clone(&rc_board);
@@ -441,24 +447,24 @@ impl Board {
         // Do I really need a different handler for each button to know which one was pressed?
         // And is there any way to get modifier keys, short of keeping track of the presses?
         let mouse_handler1 = gtk::GestureClick::builder().button(1).build();
-        let rc_board_click1 = Rc::clone(&rc_board);
-        rc_board.borrow().playing_area.add_controller(&mouse_handler1);
+        let board_click1_rc = Rc::clone(&board_rc);
+        board_rc.borrow().playing_area.add_controller(&mouse_handler1);
         mouse_handler1.connect_pressed(move |_, _, _, _ | {
-            rc_board_click1.borrow_mut().click_input("Mouse1");
+            board_click1_rc.borrow_mut().click_input("Mouse1");
         });
         let mouse_handler2 = gtk::GestureClick::builder().button(2).build();
-        let rc_board_click2 = Rc::clone(&rc_board);
-        rc_board.borrow().playing_area.add_controller(&mouse_handler2);
+        let board_click2_rc = Rc::clone(&board_rc);
+        board_rc.borrow().playing_area.add_controller(&mouse_handler2);
         mouse_handler2.connect_pressed(move |_, _, _, _ | {
-            rc_board_click2.borrow_mut().click_input("Mouse2");
+            board_click2_rc.borrow_mut().click_input("Mouse2");
         });
         let mouse_handler3 = gtk::GestureClick::builder().button(3).build();
-        let rc_board_click3 = Rc::clone(&rc_board);
-        rc_board.borrow().playing_area.add_controller(&mouse_handler3);
+        let board_click3_rc = Rc::clone(&board_rc);
+        board_rc.borrow().playing_area.add_controller(&mouse_handler3);
         mouse_handler3.connect_pressed(move |_, _, _, _ | {
-            rc_board_click3.borrow_mut().click_input("Mouse3");
+            board_click3_rc.borrow_mut().click_input("Mouse3");
         });
-        rc_board
+        board_rc
     }
 
     fn update_score(&self) {
@@ -794,6 +800,35 @@ impl Board {
                 bit <<= 1;
             }
         }
+    }
+}
+
+// derive doesn't work for raw structs like Rc and Window
+impl fmt::Debug for Board {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let hex_substate = format!("{:x}", self.substate);
+        let lines: Vec<String> = self.bitmap.iter().map(|row| { let str = format!("0X{:X},", row); str }).collect();
+        let bitmap = lines.join("\n");
+        f.debug_struct("Point")
+            .field("env.rc", &"Rc<Controller>")
+            .field("num", &self.num)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("window", &"gtk::Window")
+            .field("playing_area", &"gtk::Grid")
+            .field("preview", &"gtk::Grid")
+            .field("command_hash", &"HashTable")
+            .field("state", &self.state)
+            .field("substate", &hex_substate)
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .field("orientation", &self.orientation)
+            .field("piece", &format!("({}, {})", self.piece.0.name, self.piece.1.name))
+            .field("score", &self.score)
+            .field("piece_count", &self.piece_count)
+            .field("delay", &self.delay)
+            .field("bitmap", &bitmap)
+            .finish()
     }
 }
 

@@ -10,6 +10,7 @@ clap = { version = "4.1.4", features = ["derive"] }
 delay = "0.3.1"
 dirs = "4.0.0"
 fastrand = "1.8.0"
+fmt = "0.1.0"
 gdk4 = "0.5.5"
 glib = "0.17.0"
 gtk = { version = "0.5.5", package = "gtk4", features = ["v4_8"] }
