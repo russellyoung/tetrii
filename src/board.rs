@@ -1,5 +1,6 @@
 #![allow(unused)]
 use crate::Config;
+use crate::controller::State;
 use crate::Controller;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -132,15 +133,17 @@ const TICK_SPEEDUP_RATIO: f64 = 0.9;
 const DROP_DELAY_SPEEDUP: u64 = 8;
 
 // bits in the BOARD.SUBSTATE mask
-const SS_DROPPING:  u16 = 0x1;    // a piece is dropping
-const SS_NEW_PIECE: u16 = 0x2;    // the piece being drawn is new, it has no cells previously set
-const SS_PREVIEW:   u16 = 0x4;    // the PREVIEW option is on
-const SS_FASTER :   u16 = 0x8;    // The tick time has been changed
-
+const SS_STARTED:   u16 = 0x1;
+const SS_PAUSED:    u16 = 0x2;
+const SS_OVER:      u16 = 0x4;
+const SS_DROPPING:  u16 = 0x8;     // a piece is dropping
+const SS_NEW_PIECE: u16 = 0x10;     // the piece being drawn is new, it has no cells previously set
+const SS_PREVIEW:   u16 = 0x20;    // the PREVIEW option is on
+const SS_FASTER:    u16 = 0x40;    // The tick time has been changed
 // default commands to set up the map. The CHEAT entries can have ad hoc stuff added, the current values
 // set the next piece, which is useful for debugging (and also for getting out of tight spots)
 // TODO: allow custom configurations in the config file
-const COMMANDS:[(&str, Command); 24] =
+const COMMANDS:[(&str, Command); 25] =
     [(&"Right",  Command::Right),
      (&"Left",   Command::Left),
      (&"Down",   Command::Down),
@@ -165,6 +168,7 @@ const COMMANDS:[(&str, Command); 24] =
      (&"b-Shift", Command::Cheat(11)), // print bitmap hex, can paste into BITARRAY for debugging
      (&"d-Ctrl", Command::Cheat(12)),  // print Board
      (&"p-Ctrl", Command::Cheat(13)),  // use fake bitmap: insert bitmap at BITARRAY and recompile
+     (&"s-Ctrl", Command::Cheat(14)),  // print board substatus
 ];
 
 // builds the command hash from the array definition
@@ -174,11 +178,6 @@ fn init_command_hash() -> HashMap<String, Command> {
     command_hash
 }
     
-// I know this is frowned on. The problem is that I need to be able to signal boards from within callbacks,
-// from keys, mouse clicks, and timer events. Those all require 'static lifetime, and I couldn't find any
-// way to "fool the compiler" to make it work. Is there a better way?
-pub static mut BOARDS: Vec<Rc<RefCell<Board>>> = Vec::new();
-
 static PIECES: [Piece; 7] = [
     Piece {name: &"Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], pos: 0, },
     Piece {name: &"Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], pos: 1, },
@@ -195,9 +194,6 @@ pub enum Command {Left, Right, Down, RotateRight, RotateLeft, Drop, Pause, Resum
 
 #[derive(Copy, Clone, Debug)]
 pub enum Orientation {North, East, South, West, }
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum State { Paused, Running, Finished, }
 
 #[derive(Debug)]
 pub struct Piece {
@@ -226,10 +222,8 @@ pub struct Board {
     score_widgets: (gtk::Label, gtk::Label),
     command_hash:  HashMap<String, Command>,
     // Following are mutable. I asked on rust-lang and they suggested the approach of making the whole struct mutable
-    state:         State,
     substate:      u16,            // see SS_* consts defined above
-    x:             i32,
-    y:             i32,
+    xy:            (i32, i32),
     orientation:   Orientation,
     piece:         (&'static Piece, &'static Piece),  // (current piece, next piece)
     score:         (u32, u32),     // points and levels
@@ -281,16 +275,6 @@ impl Orientation {
     }
 }
 
-impl State {
-    fn toggle(&self) -> State {
-        match self {
-            State::Finished => State::Finished,
-            State::Paused => State::Running,
-            State::Running => State::Paused,
-        }
-    }
-}
-
 impl Piece {
     fn points(&self, orientation: Orientation) -> u32 {
         self.points[orientation.offset()]
@@ -324,22 +308,21 @@ impl Board {
     pub fn new_ref(num: usize, env_rc: Rc<RefCell<Controller>>) -> Rc<RefCell<Board>> {
         let env_clone  = Rc::clone(&env_rc);
         let env2 = env_clone.borrow();
+        let app: &gtk::Application = &env2.app_rc();
         let mut board = Board{
             env_rc: env_rc,
             num: num,
             width: env2.prop_u16("width") as i32,
             height: env2.prop_u16("height") as i32,
-            window: gtk::ApplicationWindow::new(&env2.app).into(),
+            window: gtk::ApplicationWindow::new(app).into(),
             playing_area: gtk::Grid::builder().row_homogeneous(true).column_homogeneous(true).build(),
             preview: gtk::Grid::builder().build(),
             score_widgets: (gtk::Label::builder().label("0").build(), gtk::Label::builder().label("0").build()),
             command_hash: init_command_hash(),
             bitmap: vec![0xffffffff; (env2.prop_u16("height") + 4) as usize],
-            state: State::Paused,
-            substate: 0x0,
+            substate: SS_PAUSED,
             delay: INITIAL_TICK_MSEC,
-            x: 0,
-            y: 0,
+            xy: (0, 0),
             orientation: Orientation::North,
             score: (0, 0),
             piece_count: [0; 7],
@@ -495,9 +478,9 @@ impl Board {
             self.draw_preview();
         }
         self.orientation = Orientation::North;
-        (self.x, self.y) = (self.width/2 - 2, -1);
-        if !self.can_move(self.piece.0.mask(self.orientation), self.x, self.y) {
-            self.change_state(State::Finished);
+        self.xy = (self.width/2 - 2, -1);
+        if !self.can_move(self.piece.0.mask(self.orientation), self.xy) {
+            self.to_controller(State::Finished);
             return false;
         }
         self.piece_count[self.piece.0.pos] += 1;
@@ -543,7 +526,7 @@ impl Board {
     // assumes the move can be made
     fn draw_moved_piece(&mut self, dx:i32, dy: i32, o1: Orientation) {
         let piece = self.piece.0;
-        let (x0, y0) = (self.x, self.y);
+        let (x0, y0) = self.xy;
         let (x1, y1) = (x0 + dx, y0 + dy);
 
         // set all cells which were off but will be on
@@ -579,7 +562,7 @@ impl Board {
                 clear_mask >>= 1;
             }
         }
-        (self.x, self.y) = (x1, y1);
+        self.xy = (x1, y1);
         self.orientation = o1;
     }
 
@@ -627,7 +610,8 @@ impl Board {
     //
     //////////////////////////////////////////////////////////////////
     fn do_command(&mut self, command: &Command) -> bool {
-        if self.state == State::Running || command.always() {
+        if self.substate & SS_OVER > 0 { return false; }
+        if self.substate & SS_PAUSED == 0 || command.always() {
             match command {
                 Command::Left        => self.translate_piece(1, 0),
                 Command::Right       => self.translate_piece(-1, 0),
@@ -636,9 +620,9 @@ impl Board {
                 Command::RotateRight => self.rotate_piece(Command::RotateRight),
                 Command::RotateLeft  => self.rotate_piece(Command::RotateLeft),
                 Command::Cheat(x)    => self.cheat(*x),
-                Command::Resume      => self.control_all(State::Running),
-                Command::Pause       => self.control_all(State::Paused),
-                Command::TogglePause => self.control_all(self.state.toggle()),
+                Command::Resume      => self.to_controller(State::Running),
+                Command::Pause       => self.to_controller(State::Paused),
+                Command::TogglePause => self.to_controller(if self.substate & SS_PAUSED > 0 { State::Running } else { State::Paused }),
                 _ => true,
             }
         } else { true }
@@ -661,6 +645,8 @@ impl Board {
         self.do_command(&command);
     }
 
+    fn to_controller(&self, new_state: State) -> bool { self.env_rc.borrow_mut().set_state(new_state); true }
+/*
     fn control_all(&mut self, new_state: State, ) -> bool {
         // This accesses all the boards. The problem is the current one is already owned as mut so its pointer in
         // BOARDS cannot be referenced. It is, however, available as SELF, so it gets handled differently.
@@ -673,19 +659,19 @@ impl Board {
         }
         true
     }
-    
+*/    
     fn rotate_piece(&mut self, rotate: Command) -> bool {
         let orientation = self.orientation.rotate(rotate);
         let mask = self.piece.0.mask(orientation);
-        if !self.can_move(mask, self.x, self.y) { return false; }
+        if !self.can_move(mask, self.xy) { return false; }
         self.draw_moved_piece(0, 0, orientation);
         true
     }
     
     fn translate_piece(&mut self, dx: i32, dy: i32) -> bool {
-        let (x, y) = (self.x + dx, self.y + dy);
+        let (x, y) = (self.xy.0 + dx, self.xy.1 + dy);
         let mask = self.piece.0.mask(self.orientation);
-        if !self.can_move(mask, x, y) { return false; }
+        if !self.can_move(mask, (x, y)) { return false; }
         self.draw_moved_piece(dx, dy, self.orientation);
         true
     }
@@ -711,26 +697,30 @@ impl Board {
             12 => println!("{:?}", self),
             // use the bitmap in BITARRAY to replace the current array (used for debugging)
             13 => self.init_bitmap_to(&BITARRAY),
+            14 => println!("substate for board {}: {}", self.num, substate_to_str(self.substate)),
             _ => println!("unrecognized cheat code"),
         }
         true
     }
-    
-    fn change_state(&mut self, new_state: State) -> bool {
-        if self.state == State::Finished || new_state == self.state {return true; }
-        self.state = new_state;
-        match self.state {
-            State::Running => self.tick(),
-            State::Finished => (),  // TODO: signal end to all boards
-            State::Paused => (),
+
+
+    pub fn change_state(&mut self, new_state: State) -> bool {
+        if self.substate & SS_OVER > 0 { return false; }
+        let mut ret = true;
+        match new_state {
+            State::Running => {if self.substate & SS_PAUSED > 0 {self.substate &= !SS_PAUSED;  self.tick();} true},
+            State::Finished => {self.substate |= SS_OVER; false},
+            State::Paused => { self.substate |= SS_PAUSED; true },
+            State::Paused => { self.substate |= SS_PAUSED; true },
+            State::Setup => panic!("Boards should not be built during SETUP state"),
         }
-        true
     }
 
     // see note above about different coordinate systems. Here is where they crash together.
     // BITMAP has padding of 2 bits on left, right, and bottom to make sure the mask always
     // is fully contained in the bitmap
-    fn can_move(&self, mut mask: u16, x: i32, y: i32) -> bool {
+    fn can_move(&self, mut mask: u16, xy: (i32, i32)) -> bool {
+        let (x, y) = xy;
         let mut row: usize = (y + 2) as usize;
         while mask != 0 {
             let row_bits: u16 = ((self.bitmap[row] >> x + 2) & 0xf) as u16;
@@ -743,9 +733,9 @@ impl Board {
 
     fn add_piece_to_bitmap(&mut self) {
         let mut mask = self.piece.0.mask(self.orientation) as u32;
-        let mut row = self.y as usize;
+        let mut row = self.xy.1 as usize;
         while mask != 0 {
-            self.bitmap[row + 2] |= (mask & 0xf) << (self.x + 2);
+            self.bitmap[row + 2] |= (mask & 0xf) << (self.xy.0 + 2);
             mask >>= 4;
             row += 1;
         }
@@ -753,13 +743,15 @@ impl Board {
     
     fn tick(&self) {
         let msec = self.delay;
+        let p_env = self.env_rc.borrow();
+        let p_board = p_env.board_ref(self.num - 1);    //&BOARDS[self.num - 1];
+        let rc_board = Rc::clone(p_board);
         unsafe {
-            let p_board = &BOARDS[self.num - 1];
             let f = move || -> glib::Continue {
-                let mut mut_board = p_board.borrow_mut(); 
+                let mut mut_board = rc_board.borrow_mut(); 
                 glib::Continue(
                     if mut_board.substate & SS_DROPPING != 0 { true }                      // continue the timer, but don't move the piece
-                    else if mut_board.state != State::Running { false } // stop if paused or finished
+                    else if mut_board.substate & (SS_PAUSED | SS_OVER) > 0 { false } // stop if paused or finished
                     else {
                         mut_board.do_command(&Command::Down) ||         // move down if possible...
                             mut_board.start_new_piece(false)            // ... or get new piece
@@ -770,11 +762,13 @@ impl Board {
     }
 
     fn drop_tick(&self) {
+        let msec = self.delay/DROP_DELAY_SPEEDUP;
+        let p_env = self.env_rc.borrow();
+        let p_board = p_env.board_ref(self.num - 1);    //&BOARDS[self.num - 1];
+        let rc_board = Rc::clone(p_board);
         unsafe {
-            let msec = self.delay/DROP_DELAY_SPEEDUP;
-            let p_board = &BOARDS[self.num - 1];
             let f = move || -> glib::Continue {
-                let mut mut_board = p_board.borrow_mut();
+                let mut mut_board = rc_board.borrow_mut();
                 mut_board.score.0 += 1;     // drop bonus
                 let mut success = true;
                 if !mut_board.do_command(&Command::Down) {
@@ -803,12 +797,25 @@ impl Board {
     }
 }
 
+const SUBSTATE_NAMES:[&str; 7] = ["Started", "Paused", "Over", "Dropping", "New_piece", "Preview", "Faster"];
+fn substate_to_str(mut mask: u16) -> String {
+    let mut states: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while mask != 0 {
+        if mask & 1 > 0 { states.push(&SUBSTATE_NAMES[i]); }
+        i += 1;
+        mask >>= 1;
+    }
+    states.join(", ")
+}
+    
 // derive doesn't work for raw structs like Rc and Window
 impl fmt::Debug for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hex_substate = format!("{:x}", self.substate);
         let lines: Vec<String> = self.bitmap.iter().map(|row| { let str = format!("0X{:X},", row); str }).collect();
         let bitmap = lines.join("\n");
+            
         f.debug_struct("Point")
             .field("env.rc", &"Rc<Controller>")
             .field("num", &self.num)
@@ -818,10 +825,9 @@ impl fmt::Debug for Board {
             .field("playing_area", &"gtk::Grid")
             .field("preview", &"gtk::Grid")
             .field("command_hash", &"HashTable")
-            .field("state", &self.state)
-            .field("substate", &hex_substate)
-            .field("x", &self.x)
-            .field("y", &self.y)
+//            .field("state", &self.state)
+            .field("substate", &substate_to_str(self.substate))
+            .field("xy", &self.xy)
             .field("orientation", &self.orientation)
             .field("piece", &format!("({}, {})", self.piece.0.name, self.piece.1.name))
             .field("score", &self.score)

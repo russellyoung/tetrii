@@ -17,9 +17,10 @@ fn main() {
     let controller_rc = Controller::new(config);
     let controller_rc_activate = Rc::clone(&controller_rc);
     let controller = controller_rc.borrow();
-    controller.app.connect_activate(move |_app| controller_rc_activate.borrow().build_ui());
+    let app: &gtk::Application = &controller.app_rc();
+    app.connect_activate(move |_app| controller_rc_activate.borrow().build_ui());
     let empty: Vec<String> = vec![];  // thanks to stackoverflow, I learned EMPTY is needed to keep GTK from interpreting the command line flags
-    controller.app.run_with_args(&empty);
+    app.run_with_args(&empty);
 }
 
 fn build_ui(controller: &Controller) {
