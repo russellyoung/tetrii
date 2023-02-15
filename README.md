@@ -31,3 +31,7 @@ So it appears (I could be wrong) the problem is the immutable borrow of Controll
 it mutable to start up the boards. I've tried all sorts of wrapping things in RefCell's and Rc's, but whatever I've tried has
 not worked. One thought I've had is making one big window rather than lots of them that can be moved around - but somehow I fear
 after spending all the time to do that I'd run into the same problem - and anyway, this design should be possible (sholdn't it?)
+
+  The main branch is the current (broken) state with the Controller window. The branch "no-controller" is a working one that 
+  pops up windows. To run it, you must be in the source directory (so the file style.css is available). It runs with the command
+  "cargo run -- -b 2", to run with 2 boards.
