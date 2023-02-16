@@ -212,7 +212,6 @@ pub struct Piece {
 #[derive(Clone)]
 pub struct Board {
     // immutable
-    env_rc:        Rc<RefCell<Controller>>,
     num:           usize,      // for ID purpose
     width:         i32,
     height:        i32,
@@ -305,21 +304,17 @@ impl Piece {
 impl Board {
 //    fn env(&self) -> &Controller { &self.env_rc.borrow() }
 
-    pub fn new_ref(num: usize, env_rc: Rc<RefCell<Controller>>) -> Rc<RefCell<Board>> {
-        let env_clone  = Rc::clone(&env_rc);
-        let env2 = env_clone.borrow();
-        let app: &gtk::Application = &env2.app_rc();
+    pub fn new(num: usize, env: &Controller) -> Board {
         let mut board = Board{
-            env_rc: env_rc,
             num: num,
-            width: env2.prop_u16("width") as i32,
-            height: env2.prop_u16("height") as i32,
-            window: gtk::ApplicationWindow::new(app).into(),
+            width: env.config.width as i32,
+            height: env.config.height as i32,
+            window: gtk::ApplicationWindow::new(env.app).into(),
             playing_area: gtk::Grid::builder().row_homogeneous(true).column_homogeneous(true).build(),
             preview: gtk::Grid::builder().build(),
             score_widgets: (gtk::Label::builder().label("0").build(), gtk::Label::builder().label("0").build()),
             command_hash: init_command_hash(),
-            bitmap: vec![0xffffffff; (env2.prop_u16("height") + 4) as usize],
+            bitmap: vec![0xffffffff; (env.config.height + 4) as usize],
             substate: SS_PAUSED,
             delay: INITIAL_TICK_MSEC,
             xy: (0, 0),
@@ -332,13 +327,14 @@ impl Board {
         let mut container = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
-        if env2.prop_bool("preview") {
+        if env.config.preview {
             container.append(board.make_preview());
         }
         container.append(board.make_playing_area());   // return type is different from the others because Grid already exists
         container.append(&board.make_scoreboard());
         board.window.set_child(Some(&container));
-        Board::add_handlers(board)
+//        Board::add_handlers(board);
+        board
     }
 
     pub fn show(&self) { self.window.show(); }
@@ -394,62 +390,8 @@ impl Board {
         cell
     }
     
-    fn add_handlers(board: Board) -> Rc<RefCell<Board>> {
-        // add handlers
-        let board_ref = RefCell::new(board);
-        let board_rc = Rc::new(board_ref);
-        let key_handler = gtk::EventControllerKey::new();
-        board_rc.borrow().playing_area.add_controller(&key_handler);
-        let board_key_rc = Rc::clone(&board_rc);
-        key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
-            board_key_rc.borrow_mut().keyboard_input(key, state);
-            gtk::Inhibit(false)
-        });
-        /*
-        let focus_handler = gtk::EventControllerFocus::new();
-        let board_focus_rc = Rc::clone(&board_rc);
-        board_rc.borrow().playing_area.add_controller(&focus_handler);
-        focus_handler.connect_contains_focus_notify(move |event| {
-            // this breaks if borrow_mut(), but fortunately mutability is not needed
-            board_focus_rc.borrow().focus_change(event.contains_focus());
-        });
-         */
-        /* I'd like to implement this (select on mouse over) but mac doesn't generate the events
-        let enter_handler = gtk::EventControllerFocus::new();
-        let rc_board_enter = Rc::clone(&rc_board);
-        rc_board.borrow().playing_area.add_controller(&enter_handler);
-        enter_handler.connect_contains_focus_notify(move |event| {
-            println!("enter: {}", event.contains_focus());
-            // this breaks if borrow_mut(), but fortunately mutability is not needed
-            if event.contains_focus() {
-                println!("setting it here");
-                rc_board_enter.borrow().window.grab_focus();
-            }
-        });
-         */
-        // Do I really need a different handler for each button to know which one was pressed?
-        // And is there any way to get modifier keys, short of keeping track of the presses?
-        let mouse_handler1 = gtk::GestureClick::builder().button(1).build();
-        let board_click1_rc = Rc::clone(&board_rc);
-        board_rc.borrow().playing_area.add_controller(&mouse_handler1);
-        mouse_handler1.connect_pressed(move |_, _, _, _ | {
-            board_click1_rc.borrow_mut().click_input("Mouse1");
-        });
-        let mouse_handler2 = gtk::GestureClick::builder().button(2).build();
-        let board_click2_rc = Rc::clone(&board_rc);
-        board_rc.borrow().playing_area.add_controller(&mouse_handler2);
-        mouse_handler2.connect_pressed(move |_, _, _, _ | {
-            board_click2_rc.borrow_mut().click_input("Mouse2");
-        });
-        let mouse_handler3 = gtk::GestureClick::builder().button(3).build();
-        let board_click3_rc = Rc::clone(&board_rc);
-        board_rc.borrow().playing_area.add_controller(&mouse_handler3);
-        mouse_handler3.connect_pressed(move |_, _, _, _ | {
-            board_click3_rc.borrow_mut().click_input("Mouse3");
-        });
-        board_rc
-    }
-
+    // add_handlers was removed here, get it from git if needed
+    
     fn update_score(&self) {
         self.score_widgets.0.set_text(&self.score.0.to_string());
         self.score_widgets.1.set_text(&self.score.1.to_string());
@@ -480,7 +422,8 @@ impl Board {
         self.orientation = Orientation::North;
         self.xy = (self.width/2 - 2, -1);
         if !self.can_move(self.piece.0.mask(self.orientation), self.xy) {
-            self.to_controller(State::Finished);
+            //            self.to_controller(State::Finished);
+            println!("FINISHED");
             return false;
         }
         self.piece_count[self.piece.0.pos] += 1;
@@ -620,9 +563,9 @@ impl Board {
                 Command::RotateRight => self.rotate_piece(Command::RotateRight),
                 Command::RotateLeft  => self.rotate_piece(Command::RotateLeft),
                 Command::Cheat(x)    => self.cheat(*x),
-                Command::Resume      => self.to_controller(State::Running),
-                Command::Pause       => self.to_controller(State::Paused),
-                Command::TogglePause => self.to_controller(if self.substate & SS_PAUSED > 0 { State::Running } else { State::Paused }),
+//                Command::Resume      => self.to_controller(State::Running),
+//                Command::Pause       => self.to_controller(State::Paused),
+//                Command::TogglePause => self.to_controller(if self.substate & SS_PAUSED > 0 { State::Running } else { State::Paused }),
                 _ => true,
             }
         } else { true }
@@ -645,7 +588,7 @@ impl Board {
         self.do_command(&command);
     }
 
-    fn to_controller(&self, new_state: State) -> bool { self.env_rc.borrow_mut().set_state(new_state); true }
+//    fn to_controller(&self, new_state: State) -> bool { self.env_rc.borrow_mut().set_state(new_state); true }
 /*
     fn control_all(&mut self, new_state: State, ) -> bool {
         // This accesses all the boards. The problem is the current one is already owned as mut so its pointer in
@@ -740,8 +683,9 @@ impl Board {
             row += 1;
         }
     }
-    
+
     fn tick(&self) {
+    /*
         let msec = self.delay;
         let p_env = self.env_rc.borrow();
         let p_board = p_env.board_ref(self.num - 1);    //&BOARDS[self.num - 1];
@@ -759,9 +703,11 @@ impl Board {
             };
             glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
         }
+*/
     }
 
     fn drop_tick(&self) {
+        /*
         let msec = self.delay/DROP_DELAY_SPEEDUP;
         let p_env = self.env_rc.borrow();
         let p_board = p_env.board_ref(self.num - 1);    //&BOARDS[self.num - 1];
@@ -780,8 +726,8 @@ impl Board {
             };
             glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
         }
+         */
     }
-
     // debugging function: set BITARRAY to reconstruct position
     fn init_bitmap_to(&mut self, array: &[u32]) {
         self.bitmap = array.to_vec();
