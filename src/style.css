@@ -15,13 +15,13 @@
 .ReverseEl { background-color: #468; }
 .empty {  }
 
-.board {
-  background-color: white;
+.playingarea {
+  background-color: green;
   border: solid 5px;
   border-color: black;
 }
-.board:focus { border-color: red; }
+.playingarea:focus { border-color: red; }
 
-.preview { background-color: #ddd; }
+.previewarea { background-color: #bbb; }
 
-.scoreboard { font-size: xx-large; }
+.scorearea { font-size: xx-large; }
