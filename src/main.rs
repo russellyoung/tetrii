@@ -17,16 +17,23 @@ use std::fs;
 const APP_ID: &str = "com.young-0.tetrii.rust";
 
 fn main() {
+    let config = Config::build_config();
+    println!("{:#?}", config);
     gtk::init().expect("Error initializing gtk");
     let app = gtk::Application::new( Some(APP_ID), Default::default(), );
-    app.connect_activate(|app| {
+    let height = config.height;
+    let width = config.width;
+    let preview = config.preview;
+    app.connect_activate(move |appx| {
         //let win = Controller::new(app);
         load_css(&"style.css");     // needs app to be active before this can be done
         //let win = Board::new(app, 10, 20, 0);
-        let  win = Controller::new(app);
+        let  win = Controller::new(appx);
         win.show();
+        win.set_defaults(config.boards, width, height, preview);
     });
-    app.run();
+    let empty: Vec<String> = vec![];  // thanks to stackoverflow, I learned EMPTY is needed to keep GTK from interpreting the command line flags
+    app.run_with_args(&empty);
 }
 
 fn load_css(filename: &str) {

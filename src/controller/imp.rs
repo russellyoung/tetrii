@@ -76,6 +76,13 @@ impl ObjectImpl for Controller {
 
 #[gtk::template_callbacks]
 impl Controller {
+    pub fn set_values(&self, count: u32, width: u16, height: u16, preview: bool) {
+        self.boardcount.set_property("selected", (count - 1));
+        self.width.set_property("selected", (width - 8) as u32);
+        self.height.set_property("selected", (height - 10) as u32);
+        self.preview_check.set_active(preview);
+    }
+        
     #[template_callback]
     fn start_boards(&self, button: &gtk::Button) {
         let board_count = self.boardcount.selected() + 1;

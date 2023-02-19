@@ -16,6 +16,9 @@ impl Controller {
         glib::Object::builder().property("application", app).build()
     }
 
+    pub fn set_defaults(&self, count: u32, width: u16, height: u16, preview: bool) {
+        self.imp().set_values(count, width, height, preview);
+    }
 //    pub fn attach(&self, button: &impl IsA<Widget>, x: i32, y: i32) {
 //        self.imp().grid.attach(button, x, y, 1, 1);
 //    }
