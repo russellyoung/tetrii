@@ -7,22 +7,21 @@ use gtk::Widget;
 use gtk::prelude::GridExt;
 use gtk::prelude::WidgetExt;
 use gtk::prelude::BoxExt;
+use once_cell::sync::OnceCell;
 
 glib::wrapper! {
     pub struct Board(ObjectSubclass<imp::Board>)
-    @extends gtk::Widget, gtk::Window, gtk::ApplicationWindow, @implements gio::ActionMap, gio::ActionGroup;
+    @extends gtk::Widget, gtk::Box, @implements gio::ActionMap, gio::ActionGroup;
 }
 
 impl Board {
-    pub fn new<P: glib::IsA<gtk::Application>>(num: u32, app: &P, width: u32, height: u32, preview: bool) -> Self {
+    pub fn new (num: u32, width: u32, height: u32, preview: bool) -> Self {
         let title = format!("Board {}", num + 1);
-        let board: Board = glib::Object::builder()
-            .property("width", width as i32)
-            .property("height", height as i32)
-            .property("preview", if preview {1} else {0})
-            .property("application", app)
-            .property("title", title)
-            .build();
+        let board: Board = glib::Object::builder().build();
+        board.imp().width.set(width);
+        board.imp().height.set(height);
+        board.imp().show_preview.set(preview);
+
         let this: &imp::Board = board.imp();
         this.playingarea.set_focusable(true);
         for x in 0..width {

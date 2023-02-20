@@ -2,10 +2,11 @@
 
 mod board;
 mod config;
+mod options;
 mod controller;
 
 use config::Config;
-use controller::Controller;
+use options::Options;
 use board::Board;
 use gtk::subclass::prelude::ObjectSubclassIsExt;
 use gtk::{CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION};
@@ -25,10 +26,9 @@ fn main() {
     let width = config.width;
     let preview = config.preview;
     app.connect_activate(move |appx| {
-        //let win = Controller::new(app);
         load_css(&"style.css");     // needs app to be active before this can be done
         //let win = Board::new(app, 10, 20, 0);
-        let  win = Controller::new(appx);
+        let  win = Options::new(appx);
         win.show();
         win.set_defaults(config.boards, width, height, preview);
     });

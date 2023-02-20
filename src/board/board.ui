@@ -1,74 +1,69 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
-  <template class="Board" parent="GtkApplicationWindow">
-    <property name="title">Board</property>
+  <template class="Board" parent="GtkBox">
+	<property name="valign">center</property>
+	<property name="vexpand">1</property>
+	<property name="spacing">6</property>
+	<property name="margin-start">12</property>
+	<property name="margin-end">12</property>
+	<property name="margin-top">12</property>
+	<property name="margin-bottom">12</property>
+    <property name="orientation">vertical</property>
+	
     <child>
-      <object class="GtkBox">
-		<property name="valign">center</property>
-		<property name="vexpand">1</property>
-		<property name="spacing">6</property>
-		<property name="margin-start">12</property>
-		<property name="margin-end">12</property>
-		<property name="margin-top">12</property>
-		<property name="margin-bottom">12</property>
-        <property name="orientation">vertical</property>
-
-        <child>
-          <object class="GtkGrid" id="preview">
-			<property name="halign">center</property>
-            <style>
-              <class name="previewarea"/>
-            </style>
-		  </object>
-		</child>
-
-		<child>
-          <object class="GtkGrid" id="playingarea">
-            <style>
-              <class name="playingarea"/>
-            </style>
-		  </object>
-		</child>
-
-		<child>
-          <object class="GtkBox">
-            <style>
-              <class name="scorearea"/>
-            </style>
-            <child>
-              <object class="GtkLabel">
-                <property name="label">Points: </property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkLabel" id="points">
-                <property name="label">0</property>
-                <style>
-                  <class name="score"/>
-                </style>
-              </object>
-            </child>
-            <child>
-              <object class="GtkLabel">
-                <property name="label">    Lines: </property>
-                <style>
-                  <class name="score"/>
-                </style>
-              </object>
-            </child>
-            <child>
-              <object class="GtkLabel" id="lines">
-                <property name="label">0</property>
-                <style>
-                  <class name="scoreboard"/>
-                </style>
-              </object>
-            </child>
-		  </object>
-		</child>
-
+      <object class="GtkGrid" id="preview">
+		<property name="halign">center</property>
+        <style>
+          <class name="previewarea"/>
+        </style>
 	  </object>
 	</child>
+	
+	<child>
+      <object class="GtkGrid" id="playingarea">
+        <style>
+          <class name="playingarea"/>
+        </style>
+	  </object>
+	</child>
+
+	<child>
+      <object class="GtkBox">
+        <style>
+          <class name="scorearea"/>
+        </style>
+        <child>
+          <object class="GtkLabel">
+            <property name="label">Points: </property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkLabel" id="points">
+            <property name="label">0</property>
+            <style>
+              <class name="score"/>
+            </style>
+          </object>
+        </child>
+        <child>
+          <object class="GtkLabel">
+            <property name="label">    Lines: </property>
+            <style>
+              <class name="score"/>
+            </style>
+          </object>
+        </child>
+        <child>
+          <object class="GtkLabel" id="lines">
+            <property name="label">0</property>
+            <style>
+              <class name="scoreboard"/>
+            </style>
+          </object>
+        </child>
+	  </object>
+	</child>
+
   </template>
 </interface>
 

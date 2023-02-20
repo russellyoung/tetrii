@@ -11,17 +11,15 @@ use crate::Board;
 #[template(file = "controller.ui")]
 pub struct Controller {
     #[template_child]
-    pub boardcount: TemplateChild<gtk::DropDown>,
+    pub boards_container: TemplateChild<gtk::Box>,
     #[template_child]
-    pub width: TemplateChild<gtk::DropDown>,
+    pub total_points: TemplateChild<gtk::Label>,
     #[template_child]
-    pub height: TemplateChild<gtk::DropDown>,
+    pub total_lines: TemplateChild<gtk::Label>,
     #[template_child]
-    pub start_button: TemplateChild<gtk::Button>,
+    pub start_buttonx: TemplateChild<gtk::Button>,
     #[template_child]
-    pub quit_button: TemplateChild<gtk::Button>,
-    #[template_child]
-    pub preview_check: TemplateChild<gtk::CheckButton>,
+    pub quit_buttonx: TemplateChild<gtk::Button>,
     //    pub grid: gtk::Grid,
 }
 
@@ -63,45 +61,20 @@ impl ObjectImpl for Controller {
         let gcontroller = self.obj();
         let controller = self;
         //self.start_button.connect_clicked(clone!(@weak window => move |_| { println!("{:#?}", window); }));
-        self.quit_button.connect_clicked(clone!(@weak gcontroller => move |_| gcontroller.destroy()));
-        self.start_button.connect_clicked(clone!(@weak controller => move |x| controller.start_boards(x)));
-        // I'm sure this can be done in the template file, but I couldn't find how, either in the doc or testing. I tried
-        // setting the "selected" and "selected-item" properties but they did not work
-        self.width.set_property("selected", 2u32);
-        self.height.set_property("selected", 10u32);
-//        self.obj().set_child(Some(&self.grid));
+        self.quit_buttonx.connect_clicked(clone!(@weak gcontroller => move |_| gcontroller.destroy()));
+        //5self.start_buttonx.connect_clicked(clone!(@weak controller => move |x| controller.start_boards(x)));
     }
 
 }
 
-#[gtk::template_callbacks]
 impl Controller {
-    pub fn set_values(&self, count: u32, width: u16, height: u16, preview: bool) {
-        self.boardcount.set_property("selected", (count - 1));
-        self.width.set_property("selected", (width - 8) as u32);
-        self.height.set_property("selected", (height - 10) as u32);
-        self.preview_check.set_active(preview);
-    }
         
-    #[template_callback]
-    fn start_boards(&self, button: &gtk::Button) {
-        let board_count = self.boardcount.selected() + 1;
-        let width = self.width.selected() + 8;
-        let height = self.height.selected() + 10;
-        let preview = self.preview_check.is_active();
-        let app = &self.obj().application().unwrap();
-        for i in 0u32..board_count {
-            let b = Board::new(i, app, width, height, preview);
-            b.show();
+    pub fn add_boards(&self, board_count: u32, width: u32, height: u32, preview: bool) {
+        let container = &self.boards_container;
+        for i in 0..board_count {
+            let b = Board::new(i, width, height, preview);
+            container.append(&b);
         }
-            
-        println!("boardcount is {:#?}, width is {:#?}, height is {:#?}", self.boardcount.selected_item(), self.width, self.height);
-        button.set_label("I was clicked!");
-//        self.label.set_label("The button was clicked!");
-    }
-    #[template_callback(function, name = "strlen")]
-    fn string_length(s: &str) -> u64 {
-        s.len() as u64
     }
 }
 
