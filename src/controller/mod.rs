@@ -14,7 +14,7 @@ glib::wrapper! {
 impl Controller {
     pub fn new<P: glib::IsA<gtk::Application>>(app: &P, count: u32, width: u32, height: u32, preview: bool) -> Self {
         let controller: Controller = glib::Object::builder().property("application", app).build();
-        controller.imp().add_boards(count, width, height, preview);
+        controller.imp().initialize(count, width, height, preview);
         controller
     }
 }

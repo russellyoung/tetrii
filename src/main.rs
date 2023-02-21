@@ -19,7 +19,6 @@ const APP_ID: &str = "com.young-0.tetrii.rust";
 
 fn main() {
     let config = Config::build_config();
-    println!("{:#?}", config);
     gtk::init().expect("Error initializing gtk");
     let app = gtk::Application::new( Some(APP_ID), Default::default(), );
     let height = config.height;
@@ -46,3 +45,11 @@ fn load_css(filename: &str) {
         STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 }
+pub const CMD_LEFT: u32             = 0x1;
+pub const CMD_RIGHT: u32            = 0x2;
+pub const CMD_DOWN: u32             = 0x4;
+pub const CMD_CLOCKWISE: u32        = 0x8;
+pub const CMD_COUNTERCLOCKWISE: u32 = 0x10;
+pub const CMD_CHEAT: u32            = 0x80000000;
+pub const CMD_CHEAT_END: u32        = 0x80000100;
+

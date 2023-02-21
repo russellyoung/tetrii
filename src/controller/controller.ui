@@ -93,10 +93,6 @@
 				  <class name="box"/>
 				</style>
 				<property name="label">Start</property>
-				<layout>
-				  <property name="column">0</property>
-				  <property name="row">4</property>
-				</layout>
 			  </object>
 			</child>
 			<child>
@@ -105,10 +101,6 @@
 				  <class name="quit-button"/>
 				</style>
 				<property name="label">Quit</property>
-				<layout>
-				  <property name="column">1</property>
-				  <property name="row">4</property>
-				</layout>
 			  </object>
 			</child>
 		  </object>

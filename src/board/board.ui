@@ -20,7 +20,7 @@
 	</child>
 	
 	<child>
-      <object class="GtkGrid" id="playingarea">
+      <object class="GtkGrid" id="playing_area">
         <style>
           <class name="playingarea"/>
         </style>

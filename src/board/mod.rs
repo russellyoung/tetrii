@@ -8,6 +8,8 @@ use gtk::prelude::GridExt;
 use gtk::prelude::WidgetExt;
 use gtk::prelude::BoxExt;
 use once_cell::sync::OnceCell;
+use gtk::glib::closure_local;
+use gtk::prelude::ObjectExt;
 
 glib::wrapper! {
     pub struct Board(ObjectSubclass<imp::Board>)
@@ -15,18 +17,18 @@ glib::wrapper! {
 }
 
 impl Board {
-    pub fn new (num: u32, width: u32, height: u32, preview: bool) -> Self {
-        let title = format!("Board {}", num + 1);
+    pub fn new (id: u32, width: u32, height: u32, preview: bool) -> Self {
+        let title = format!("Board {}", id + 1);
         let board: Board = glib::Object::builder().build();
-        board.imp().width.set(width);
-        board.imp().height.set(height);
-        board.imp().show_preview.set(preview);
-
+        board.imp().width_oc.set(width);
+        board.imp().height_oc.set(height);
+        board.imp().show_preview_oc.set(preview);
+        board.imp().id_oc.set(id);
         let this: &imp::Board = board.imp();
-        this.playingarea.set_focusable(true);
+        this.playing_area.set_focusable(true);
         for x in 0..width {
             for y in 0..height {
-                this.playingarea.attach(&Board::make_cell(), x as i32, y as i32, 1, 1);
+                this.playing_area.attach(&Board::make_cell(), x as i32, y as i32, 1, 1);
             }
         }
         if preview {
@@ -36,6 +38,15 @@ impl Board {
                 }
             }
         }
+        let number:i32 = 4;
+        board.connect_closure(
+            "board-command",
+            false,
+            closure_local!(move |b: Board, id: u32, mask: u32| {
+                b.imp().do_command(mask);
+            }),
+        );
+        board.imp().prepare();
         board
     }
 
