@@ -18,7 +18,6 @@ glib::wrapper! {
 
 impl Board {
     pub fn new (id: u32, width: u32, height: u32, preview: bool) -> Self {
-        let title = format!("Board {}", id + 1);
         let board: Board = glib::Object::builder().build();
         board.imp().width_oc.set(width);
         board.imp().height_oc.set(height);
@@ -38,12 +37,18 @@ impl Board {
                 }
             }
         }
-        let number:i32 = 4;
         board.connect_closure(
             "board-command",
             false,
-            closure_local!(move |b: Board, id: u32, mask: u32| {
+            closure_local!(|b: Board, id: u32, mask: u32| {
                 b.imp().do_command(mask);
+            }),
+        );
+        board.connect_closure(
+            "mouse-click",
+            false,
+            closure_local!(|b: Board, board_num: u32| {
+                println!("Mouse click from {}: {:#?}", board_num, b);
             }),
         );
         board.imp().prepare();
@@ -56,16 +61,12 @@ impl Board {
             .orientation(gtk::Orientation::Vertical)
             .build();
         let label = gtk::Label::builder()
-            .label("")
+//            .label("")
             .build();
         label.add_css_class("cell");
         //cell.add_css_class("cell");
         cell.append(&label);
         cell
     }
-//    pub fn attach(&self, button: &impl IsA<Widget>, x: i32, y: i32) {
-//        self.imp().grid.attach(button, x, y, 1, 1);
-//    }
-    
 }
 

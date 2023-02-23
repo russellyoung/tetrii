@@ -45,11 +45,11 @@ fn load_css(filename: &str) {
         STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 }
-pub const CMD_LEFT: u32             = 0x1;
-pub const CMD_RIGHT: u32            = 0x2;
-pub const CMD_DOWN: u32             = 0x4;
-pub const CMD_CLOCKWISE: u32        = 0x8;
-pub const CMD_COUNTERCLOCKWISE: u32 = 0x10;
+pub const CMD_LEFT: u32             = 1;
+pub const CMD_RIGHT: u32            = 2;
+pub const CMD_DOWN: u32             = 3;
+pub const CMD_CLOCKWISE: u32        = 4;
+pub const CMD_COUNTERCLOCKWISE: u32 = 5;
 pub const CMD_CHEAT: u32            = 0x80000000;
 pub const CMD_CHEAT_END: u32        = 0x80000100;
 

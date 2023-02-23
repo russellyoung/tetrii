@@ -12,6 +12,9 @@ use gtk::prelude::GridExt;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
+use crate::controller::Controller;
+use gtk::Widget;
+use gtk::glib::clone;
 
 //
 // Boilerplate
@@ -56,39 +59,62 @@ impl Default for Internal {
                                           score: (0, 0), piece_counts: [0; 7], bitmap: Vec::<u32>::new(), state: 0, }}
 }
 
-
-
-
 #[glib::object_subclass]
 impl ObjectSubclass for Board {
     const NAME: &'static str = "Board";
     type Type = super::Board;
     type ParentType = gtk::Box;
-
     fn class_init(klass: &mut Self::Class) {
         klass.bind_template();
     }
-
     fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
         obj.init_template();
     }
 }
-
 
 impl ObjectImpl for Board {
     fn signals() -> &'static [Signal] {
         use once_cell::sync::Lazy;
         static SIGNALS: Lazy<Vec<Signal>> = Lazy::new(|| {
             vec![Signal::builder("board-command")
+                 // board ID, command mask (CMD_*)
                  .param_types([u32::static_type(), u32::static_type()])
                  .build(),
-                 Signal::builder("board-report")
-                 .param_types([u32::static_type(), u32::static_type(), u32::static_type()])
+                 Signal::builder("mouse-click")
+                 .param_types([u32::static_type(), u32::static_type()])
                  .build(),
-                 
             ]
         });
         SIGNALS.as_ref()
+    }
+
+    fn constructed(&self) {
+        self.parent_constructed();
+        let this = self;
+		// Does this really need 3 separate handlers? The event doesn't seem to supply the button
+        let gesture_left = gtk::GestureClick::new();
+        gesture_left.connect_pressed(clone!(@weak this => move |gesture, _x, _y, _z| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            this.controller().emit_by_name::<()>("mouse-click", &[&this.id(), &0u32]);
+        }));
+        gesture_left.set_button(gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32);
+        self.obj().add_controller(&gesture_left);
+
+        let gesture_middle = gtk::GestureClick::new();
+        gesture_middle.connect_pressed(clone!(@weak this => move |gesture, _x, _y, _z| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            this.controller().emit_by_name::<()>("mouse-click", &[&this.id(), &1u32]);
+        }));
+        gesture_middle.set_button(gtk::gdk::ffi::GDK_BUTTON_MIDDLE as u32);
+        self.obj().add_controller(&gesture_middle);
+
+        let gesture_right = gtk::GestureClick::new();
+        gesture_right.connect_pressed(clone!(@weak this => move |gesture, _x, _y, _z| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            this.controller().emit_by_name::<()>("mouse-click", &[&this.id(), &2u32]);
+        }));
+        gesture_right.set_button(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32);
+        self.obj().add_controller(&gesture_right);
     }
 }
 
@@ -97,7 +123,7 @@ impl BoxImpl for Board {}
 
 //////////////////////////////////////////////////////////////////
 //
-// Real code starts here
+// app impl code starts here
 //
 //////////////////////////////////////////////////////////////////
 
@@ -192,8 +218,16 @@ impl Piece {
 impl Board {
     fn height(&self) -> u32 { *self.height_oc.get().unwrap() }
     fn width(&self) -> u32 { *self.width_oc.get().unwrap() }
+    fn id(&self) -> u32 { *self.id_oc.get().unwrap() }
+    fn show_preview(&self) -> bool { *self.show_preview_oc.get().unwrap() }
+    // TODO: get via css ID?
+	// Is this considered good practice?
+    fn controller(&self) -> Widget { self.obj().parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap() }
     
+    
+    // Most initializes correctly by default, BITMAP relies on height and width
     pub fn prepare(&self) {
+		let show_preview = self.show_preview();
         let mut bitmap: Vec<u32> = vec![0xffffffff; (self.height() + 4) as usize];
         let mask = !(((0x1 << self.width()) - 1) << 2);
         for i in 0..bitmap.len() - 2 {
@@ -202,33 +236,29 @@ impl Board {
         {
             let mut internal = self.internal.borrow_mut();
             internal.bitmap = bitmap;
-            internal.state = if *self.show_preview_oc.get().unwrap() {SS_PREVIEW} else {0};
-            // everything else initializes correctly by default, BITMAP relies on height and width
+            internal.state = if show_preview {SS_PREVIEW} else {0};
         }
         self.start_new_piece(true);
     }
 
-    pub fn do_command(&self, bits: u32) {
-        match bits {
-            CMD_LEFT => self.translate_piece(1, 0),
-            CMD_RIGHT => self.translate_piece(-1, 0),
-            CMD_DOWN => self.translate_piece(0, 1),
-            CMD_COUNTERCLOCKWISE => self.rotate_piece(CMD_COUNTERCLOCKWISE),
-            CMD_CLOCKWISE => self.rotate_piece(CMD_CLOCKWISE),
-            CMD_CHEAT..=CMD_CHEAT_END => (),
-            _ => (),
-        }
-    }
-        
     fn start_new_piece(&self, initial: bool) -> bool{
         // The first time through there is no old piece to record on the bitmap. In subsequent calls the old piece
         // needs to be transferred to the bitmap before loading a new one
         if !initial {
-            //            self.add_piece_to_bitmap()
-            // send scores
+            self.add_piece_to_bitmap();
+            self.update_score();
         }
-        let mut show_preview = false;
+        let show_preview = self.show_preview();
         let mut old_pos = 0;
+        {
+            let mut internal = self.internal.borrow_mut();
+            // prepare for next piece: reinitialize state for the new piece
+            internal.piece_counts[old_pos] += 1;
+            internal.piece = (internal.piece.1, Piece::random());
+            internal.orientation = Orientation::North;
+            internal.xy = ((self.width()/2 - 2) as i32, -1);
+            internal.state |= SS_NEW_PIECE;
+        }
         {
             let internal = self.internal.borrow();
             old_pos = internal.piece.0.pos;
@@ -237,44 +267,82 @@ impl Board {
                 return false;
             }
         }
-        {
-            let mut internal = self.internal.borrow_mut();
-            // prepare for next piece: reinitialize state for the new piece
-            internal.piece_counts[old_pos] += 1;
-            internal.piece = (internal.piece.1, Piece::random());
-            internal.orientation = Orientation::North;
-            internal.xy = ((self.width()/2 - 2) as i32, -1);
-            show_preview = internal.state & SS_PREVIEW > 0;
-            internal.state |= SS_NEW_PIECE;
-        }
         if show_preview {
             self.draw_preview();
         }
         self.draw_moved_piece(0, 0, Orientation::North);
         true
     }
+
+    pub fn do_command(&self, bits: u32) {
+        match bits {
+            CMD_LEFT => self.translate_piece(1, 0),
+            CMD_RIGHT => self.translate_piece(-1, 0),
+            // ignore return value for everything but DOWN
+            CMD_DOWN => self.translate_piece(0, 1) || self.start_new_piece(false),
+            CMD_COUNTERCLOCKWISE => self.rotate_piece(CMD_COUNTERCLOCKWISE),
+            CMD_CLOCKWISE => self.rotate_piece(CMD_CLOCKWISE),
+            CMD_CHEAT..=CMD_CHEAT_END => self.do_cheat(bits & 0xfff),
+            _ => true,
+        };
+    }
     
-    fn translate_piece(&self, dx: i32, dy: i32) {
+    fn translate_piece(&self, dx: i32, dy: i32) -> bool {
         let mut orientation = Orientation::North;
         {
             let internal = self.internal.borrow();
             let (x, y) = (internal.xy.0 + dx, internal.xy.1 + dy);
             let mask = internal.piece.0.mask(internal.orientation);
-            if !self.can_move(mask, (x, y)) { return ; }
+            if !self.can_move(mask, (x, y)) {
+                return false;
+            }
             orientation = internal.orientation;
         }
         self.draw_moved_piece(dx, dy, orientation);
+        true
     }
         
-    fn rotate_piece(&self, rotate: u32) {
+    fn rotate_piece(&self, rotate: u32) -> bool{
         let mut orientation = Orientation::North;
         {
             let internal = self.internal.borrow();
             orientation = internal.orientation.rotate(rotate);
             let mask = internal.piece.0.mask(orientation);
-            if !self.can_move(mask, internal.xy) { return; }
+            if !self.can_move(mask, internal.xy) { return false; }
         }
         self.draw_moved_piece(0, 0, orientation);
+        true
+    }
+    
+    fn do_cheat(&self, code: u32) -> bool {
+        match code {
+            0..=8 => {
+				{ self.internal.borrow_mut().piece.1 = &PIECES[code as usize]; }
+				if self.show_preview() { self.draw_preview();};
+			},
+            10 => self.init_bitmap_to(&BITARRAY),
+            11 => {
+                println!("------------------------------------");
+                self.internal.borrow().bitmap.iter().for_each(|x| { println!("| {:032b} |", x); });
+                println!("------------------------------------");
+            },
+            12 => {self.internal.borrow().bitmap.iter().for_each(|x| { println!("0x{:x}", x); })},
+            13 => self.remove_row(19),
+            29 => { println!("remove row {}", code - 11); self.remove_row((code - 11) as i32);},
+            _ => ()
+        };
+        true
+    }
+    
+    fn update_score(&self) {
+        let (lines, bonus) = self.completed_lines();
+        let mut internal = self.internal.borrow_mut();
+        let delta_score = internal.piece.0.points(internal.orientation) + bonus;
+        internal.score.0 += delta_score;
+        internal.score.1 += lines;
+        self.points.set_label(&internal.score.0.to_string());
+        self.lines.set_label(&internal.score.1.to_string());
+        self.controller().emit_by_name::<()>("board-report", &[&self.id(), &delta_score, &lines])
     }
     
     // see note above about different coordinate systems. Here is where they crash together.
@@ -291,7 +359,51 @@ impl Board {
         }
         true
     }
+	
+    fn completed_lines(&self) -> (u32, u32) {
+		// first compute the rows to remove
+        let mut to_remove = Vec::<i32>::new();    // this holds the line numbers to remove in bitmap coordinates, in ascending order
+		{
+			let bitmap: &Vec<u32> = &self.internal.borrow().bitmap;
+			// originally I used -1 here, as it is simpler. By making this mask I can use the leading bits to mark buffer rows for debugging
+			let mask: u32 = (0x1 << self.width() + 4) - 1;
+			for i in 2..(bitmap.len() as i32) - 2 {
+//              if bitmap[i as usize] == 0xffffffff {
+				if bitmap[i as usize] & mask == mask {
+					to_remove.push(i - 2);
+				} 
+			}
+		}
+		// next redraw the board with the lines removed. This must be done top-to-bottom
+        to_remove.iter().for_each(|x| self.remove_row(*x));
 
+		// finally update the bitmap. This must be done bottom-to-top to maintain the offsets, and then add the new empty rows on top
+		let mut bitmap = &mut self.internal.borrow_mut().bitmap;
+		for board_row in to_remove.iter().rev() {
+			// +2: move to bitmap coords
+			bitmap.remove((board_row + 2) as usize);
+		}
+		let new_row_mask:u32 = 0xffffffff & !(((1 << self.width()) - 1) << 2);  // mask is -1 with the bits representing the playing area cleared
+		for _ in 0..to_remove.len() {
+			bitmap.insert(0, new_row_mask);
+		}
+		let len: u32 = to_remove.len() as u32;
+		(len, len*len*5)    // (lines completed, completion bonus): bonus is 5 times completed lines squared (max of 100 pts)
+    }
+    
+    fn remove_row(&self, row: i32) {
+        // move down all cells above this row. Row is in board coords
+		for y in (0..row + 1).rev() {
+            for x in 0..self.width() as i32 {
+                let lc = self.get_cell_color(x, y);
+                let upper_color = self.get_cell_color(x, y - 1);
+                if upper_color != self.get_cell_color(x, y) {
+                    self.set_cell_color((x, y), &upper_color);
+                }
+            }
+        }
+    }
+    
     // All pieces in their North position are contained in rows 1 and 2, so the mask is of the form 0x0**0 and only the
     // middle 2 quartets are drawn
     fn draw_preview(&self) {
@@ -304,7 +416,7 @@ impl Board {
             mask >>= 1;
         }
     }
-
+    
     // Moves a piece to a new position. The new position should have already been checked, this
     // assumes the move can be made
     fn draw_moved_piece(&self, dx:i32, dy: i32, o1: Orientation) {
@@ -353,6 +465,17 @@ impl Board {
         internal.state &= !SS_NEW_PIECE;
     }
     
+    fn add_piece_to_bitmap(&self) {
+        let mut internal = self.internal.borrow_mut();
+        let mut mask = internal.piece.0.mask(internal.orientation) as u32;
+        let mut row = internal.xy.1 as usize;
+        while mask != 0 {
+            internal.bitmap[row + 2] |= (mask & 0xf) << (internal.xy.0 + 2);
+            mask >>= 4;
+            row += 1;
+        }
+    }
+    
     // lowest level functions
     // Drawing the pieces is done by setting css class for widgets in the board.playing_area object. This way I don't need
     // to handle any redrawing, and setting the colors is simple. If drawing turns out to be better then board.playing_area
@@ -361,11 +484,67 @@ impl Board {
         self.playing_area.child_at((self.width() as i32) - 1 - xy.0 as i32, xy.1)
     }
 
+    fn get_cell_color(&self, x: i32, y: i32) -> String {
+        let cell_opt = self.cell_at((x, y));
+        match cell_opt {
+            None => "empty".to_string(),
+            Some(widget) => { let class_names = widget.css_classes();
+                              if class_names.len() > 0 {class_names[0].to_string()} else {"empty".to_string()}
+            }
+        }
+    }
+    
     fn set_cell_color(&self, xy: (i32, i32), piece_name: &str) {
         match self.cell_at(xy) {
-            Some(cell) => cell.set_css_classes(&["cell", piece_name]),
+            Some(cell) => cell.set_css_classes(&[piece_name]),
             None => (),    // if the cell is off the visible board just don't draw it
         };
     }
+
+
+    // debugging function: set BITARRAY to reconstruct position
+    fn init_bitmap_to(&self, array: &[u32]) {
+        {
+            let mut internal = self.internal.borrow_mut();
+            internal.bitmap = array.to_vec();
+        }
+        let internal = self.internal.borrow();
+        for y in 2..self.height() + 2 {
+            let mut bit = 0x1u32 << 2;     // skip the first 2 edge bits
+            for x in 0..self.width() {
+                if bit & internal.bitmap[y as usize] != 0 {
+                    self.set_cell_color((x as i32, (y - 2) as i32), &PIECES[(y as usize)%PIECES.len()].name);   // rows will be the same color
+                }
+                bit <<= 1;
+            }
+        }
+    }
 }
-    
+
+// set this up and use with init_bitmap_to() for debugging special cases (get data from cheat 11)
+const BITARRAY: [u32; 24] = [
+    0x007FF003,
+    0x017FF003,
+    0x027FF003,
+    0x037FF003,
+    0x047FF003,
+    0x057FF003,
+    0x067FF003,
+    0x077FF003,
+    0x087FF003,
+    0x097FF003,
+    0x0a7FF003,
+    0x0b7FF003,
+    0x0c7FF003,
+    0x0d7FF003,
+    0x0e7FF003,
+    0x0f7FF003,
+    0x107FF003,
+    0x117FF003,
+    0x127FFFF7,
+    0x137FFFF7,
+    0x147FFFF7,
+    0x157FFFF7,
+    0x167FFFFF,
+    0x177FFFFF,
+];

@@ -12,6 +12,7 @@ use once_cell::sync::OnceCell;
 use std::cell::{RefCell, Cell};
 use gdk4::ModifierType;
 use std::rc::Rc;
+use gtk::glib::subclass::Signal;
 
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
 pub enum State {#[default] Paused, Running, Finished, }
@@ -20,7 +21,7 @@ pub enum State {#[default] Paused, Running, Finished, }
 #[derive(Debug, Default, CompositeTemplate)]
 #[template(file = "controller.ui")]
 pub struct Controller {
-    mut_vars: Rc<RefCell<MutVars>>,
+    internal: Rc<RefCell<Internal>>,
     
     #[template_child]
     pub boards_container: TemplateChild<gtk::Box>,
@@ -36,10 +37,11 @@ pub struct Controller {
 }
 
 #[derive(Debug, Default)]
-struct MutVars {
-    active: usize,
-    score: (u32, u32),
+struct Internal {
+    active: usize,        // the board to direct commands to
+    score: (u32, u32),    // (points, completed lines)
     state: State,
+    dropping: u32,        // mask telling if a board is currently dropping a piece
 }
 
 #[glib::object_subclass]
@@ -73,14 +75,40 @@ impl ObjectImpl for Controller {
         let x: i32 = 17;
         unsafe {
             controller.quit_buttonx.connect_clicked(clone!(@weak gcontroller => move |_| gcontroller.destroy()));
+            
             let key_handler = gtk::EventControllerKey::new();
             controller.obj().add_controller(&key_handler);
-            let mut_vars = Rc::clone(&self.mut_vars);
+            let internal = Rc::clone(&self.internal);
             key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
-                do_command(&mut_vars, keyboard_input(key, state));
+                do_command(&internal, keyboard_input(key, state));
                 gtk::Inhibit(false)
             });
+/*
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_pressed(|gesture, id, button| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                do_command(&internal, mouse_input(button));
+                gtk::Inhibit(false)
+            });
+            controller.obj().add_controller(&gesture);
+             */
         }
+    }
+
+    fn signals() -> &'static [Signal] {
+        use once_cell::sync::Lazy;
+        static SIGNALS: Lazy<Vec<Signal>> = Lazy::new(|| {
+            vec![Signal::builder("board-report")
+                 // board id, points, lines
+                 .param_types([u32::static_type(), u32::static_type(), u32::static_type(), ])
+                 .build(),
+                 Signal::builder("mouse-click")
+                 // board id, which-mouse
+                 .param_types([u32::static_type(), u32::static_type(), ])
+                 .build(),
+            ]
+        });
+        SIGNALS.as_ref()
     }
 }
 
@@ -128,7 +156,7 @@ impl Command {
 }
 
 // default commands
-const COMMANDS:[(&str, Command); 25] =
+const COMMANDS:[(&str, Command); 26] =
     [(&"Right",  Command::Right),
      (&"Left",   Command::Left),
      (&"Down",   Command::Down),
@@ -149,11 +177,12 @@ const COMMANDS:[(&str, Command); 25] =
      (&"5",      Command::Cheat(4)),
      (&"6",      Command::Cheat(5)),
      (&"7",      Command::Cheat(6)),
-     (&"b-Ctrl", Command::Cheat(10)),  // print bitmap binary, good for viewing
-     (&"b-Shift", Command::Cheat(11)), // print bitmap hex, can paste into BITARRAY for debugging
-     (&"d-Ctrl", Command::Cheat(12)),  // print Board
-     (&"p-Ctrl", Command::Cheat(13)),  // use fake bitmap: insert bitmap at BITARRAY and recompile
+     (&"b-Ctrl", Command::Cheat(10)),  // use fake bitmap: insert bitmap at BITARRAY and recompile
+     (&"d-Shift", Command::Cheat(11)), // dump bitmap binary, easy to see current state
+     (&"d-Ctrl", Command::Cheat(12)),  // dump bitmap hex, can paste into BITARRAY for debugging
+     (&"p-Ctrl", Command::Cheat(13)),  
      (&"s-Ctrl", Command::Cheat(14)),  // print board substatus
+     (&"9-Ctrl", Command::Cheat(29)), // remove second-to-las
 ];
 
 impl Controller {
@@ -163,23 +192,29 @@ impl Controller {
             let container = &self.boards_container;
             for i in 0..board_count {
                 let b = Board::new(i, width, height, preview);
-                b.connect_closure(
-                    "board_report",
-                    false,
-                    closure_local!( |id: u32, score: u32, levels: u32| {
-                        println!("board {} reports {} points, {} levels", id, score, levels);
-                    }),
-                );
                 container.append(&b);
                 BOARDS.push(b);
             }
         }
     }
+
+    pub fn piece_crashed(&self, board_id: u32, points: u32, lines: u32) {
+        let mut internal = self.internal.borrow_mut();
+        internal.dropping &= !0x1 << board_id;
+        let old_score = internal.score;
+        internal.score = (old_score.0 + points, old_score.1 + lines);
+        self.total_points.set_label(&internal.score.0.to_string());
+        self.total_lines.set_label(&internal.score.1.to_string());
+    }
+
+    pub fn mouse_click(&self, id: u32, button: u32) {
+        let internal = Rc::clone(&self.internal);
+        do_command(&internal, mouse_input(button));
+    }
 }
 
-fn do_command(mut_vars: &Rc<RefCell<MutVars>>, command: Command) {
-    let mut id = { mut_vars.borrow().active};
-    id = 1;
+fn do_command(internal: &Rc<RefCell<Internal>>, command: Command) {
+    let mut id = { internal.borrow().active};
     match command {
         // board commands
         Command::Left => send_command(id, CMD_LEFT), 
@@ -193,7 +228,7 @@ fn do_command(mut_vars: &Rc<RefCell<MutVars>>, command: Command) {
         Command::Pause => (),
         Command::Resume => (),
         Command::TogglePause => (),
-        Command::SetBoard(new_id) => { if new_id < board_count() { mut_vars.borrow_mut().active = new_id; }},
+        Command::SetBoard(new_id) => { if new_id < board_count() { internal.borrow_mut().active = new_id; }},
         Command::Nop => (),
     }
 }
@@ -202,6 +237,13 @@ fn keyboard_input(key: gdk4::Key, modifiers: ModifierType) -> Command {
     let key_string = modifier_string(key.to_lower().name().unwrap().to_string(), modifiers.bits());
     unsafe {
         *COMMANDMAP.get(&key_string).unwrap_or(&Command::Nop)
+    }
+}
+
+fn mouse_input(button: u32) -> Command {
+    let button_string = format!("Mouse{}", button + 1);
+    unsafe {
+        *COMMANDMAP.get(&button_string).unwrap_or(&Command::Nop)
     }
 }
 
@@ -230,3 +272,19 @@ fn board_count() -> usize {
     }
 }
 
+    fn tick(msec: u32, board_num: u32) {
+        /*
+    unsafe {
+        let f = move || -> glib::Continue {
+            glib::Continue(
+                if mut_board.substate & SS_DROPPING != 0 { true }                      // continue the timer, but don't move the piece
+                    else if mut_board.substate & (SS_PAUSED | SS_OVER) > 0 { false } // stop if paused or finished
+                    else {
+                        mut_board.do_command(&Command::Down) ||         // move down if possible...
+                            mut_board.start_new_piece(false)            // ... or get new piece
+                    })
+            };
+            glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
+        }
+*/
+    }
