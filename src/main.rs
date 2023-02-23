@@ -50,6 +50,8 @@ pub const CMD_RIGHT: u32            = 2;
 pub const CMD_DOWN: u32             = 3;
 pub const CMD_CLOCKWISE: u32        = 4;
 pub const CMD_COUNTERCLOCKWISE: u32 = 5;
+pub const CMD_SELECT: u32           = 6;
+pub const CMD_DESELECT: u32         = 7;
 pub const CMD_CHEAT: u32            = 0x80000000;
 pub const CMD_CHEAT_END: u32        = 0x80000100;
 

@@ -20,7 +20,9 @@
   border: solid 5px;
   border-color: black;
 }
-.playingarea:focus { border-color: red; }
+.selected {
+  border-color: red;
+}
 
 .previewarea { background-color: #bbb; }
 

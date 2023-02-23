@@ -128,7 +128,7 @@ impl BoxImpl for Board {}
 //////////////////////////////////////////////////////////////////
 
 // command mask used to send to BOARD. All others are handled in the controller
-use crate::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_CHEAT, CMD_CHEAT_END};
+use crate::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_SELECT, CMD_DESELECT, CMD_CHEAT_END, CMD_CHEAT};
 
 static PIECES: [Piece; 7] = [
     Piece {name: &"Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], pos: 0, },
@@ -282,6 +282,8 @@ impl Board {
             CMD_DOWN => self.translate_piece(0, 1) || self.start_new_piece(false),
             CMD_COUNTERCLOCKWISE => self.rotate_piece(CMD_COUNTERCLOCKWISE),
             CMD_CLOCKWISE => self.rotate_piece(CMD_CLOCKWISE),
+			CMD_SELECT => { self.playing_area.add_css_class("selected"); true},
+			CMD_DESELECT => { self.playing_area.remove_css_class("selected"); true},
             CMD_CHEAT..=CMD_CHEAT_END => self.do_cheat(bits & 0xfff),
             _ => true,
         };

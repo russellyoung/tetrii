@@ -139,7 +139,7 @@ pub enum Command {Left,               // commands that are sent to the Boards
 }
 
 // command mask used to send to BOARD. All others are handled locally
-use crate::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_CHEAT};
+use crate::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_SELECT, CMD_DESELECT, CMD_CHEAT_END, CMD_CHEAT};
 
 impl Command {
     fn get_mask(&self) -> Option<u32> {
@@ -156,7 +156,7 @@ impl Command {
 }
 
 // default commands
-const COMMANDS:[(&str, Command); 26] =
+const COMMANDS:[(&str, Command); 31] =
     [(&"Right",  Command::Right),
      (&"Left",   Command::Left),
      (&"Down",   Command::Down),
@@ -170,15 +170,20 @@ const COMMANDS:[(&str, Command); 26] =
      (&"Mouse1", Command::Left),
      (&"Mouse2", Command::Down),
      (&"Mouse3", Command::Right),
-     (&"1",      Command::Cheat(0)),   // force piece
-     (&"2",      Command::Cheat(1)),
-     (&"3",      Command::Cheat(2)),
-     (&"4",      Command::Cheat(3)),
-     (&"5",      Command::Cheat(4)),
-     (&"6",      Command::Cheat(5)),
-     (&"7",      Command::Cheat(6)),
+     (&"1",      Command::SetBoard(0)),
+     (&"2",      Command::SetBoard(1)),
+     (&"3",      Command::SetBoard(2)),
+     (&"4",      Command::SetBoard(3)),
+     (&"5",      Command::SetBoard(4)),
+     (&"1-Ctrl", Command::Cheat(0)),   // force piece
+     (&"2-Ctrl", Command::Cheat(1)),
+     (&"3-Ctrl", Command::Cheat(2)),
+     (&"4-Ctrl", Command::Cheat(3)),
+     (&"5-Ctrl", Command::Cheat(4)),
+     (&"6-Ctrl", Command::Cheat(5)),
+     (&"7-Ctrl", Command::Cheat(6)),
      (&"b-Ctrl", Command::Cheat(10)),  // use fake bitmap: insert bitmap at BITARRAY and recompile
-     (&"d-Shift", Command::Cheat(11)), // dump bitmap binary, easy to see current state
+     (&"d-Shift",Command::Cheat(11)), // dump bitmap binary, easy to see current state
      (&"d-Ctrl", Command::Cheat(12)),  // dump bitmap hex, can paste into BITARRAY for debugging
      (&"p-Ctrl", Command::Cheat(13)),  
      (&"s-Ctrl", Command::Cheat(14)),  // print board substatus
@@ -196,6 +201,7 @@ impl Controller {
                 BOARDS.push(b);
             }
         }
+		send_command(0, CMD_SELECT);
     }
 
     pub fn piece_crashed(&self, board_id: u32, points: u32, lines: u32) {
@@ -228,9 +234,16 @@ fn do_command(internal: &Rc<RefCell<Internal>>, command: Command) {
         Command::Pause => (),
         Command::Resume => (),
         Command::TogglePause => (),
-        Command::SetBoard(new_id) => { if new_id < board_count() { internal.borrow_mut().active = new_id; }},
+        Command::SetBoard(new_id) => {internal.borrow_mut().active = set_board(id, new_id)},
         Command::Nop => (),
     }
+}
+
+fn set_board(old_id: usize, new_id: usize) -> usize {
+	if new_id >= board_count() || new_id == old_id { return old_id; }
+	send_command(old_id, CMD_DESELECT);
+	send_command(new_id, CMD_SELECT);
+	new_id
 }
 
 fn keyboard_input(key: gdk4::Key, modifiers: ModifierType) -> Command {
@@ -266,13 +279,11 @@ fn modifier_string(mut key: String, bits: u32) -> String {
     key
 }
 
-fn board_count() -> usize {
-    unsafe {
-        BOARDS.len()
-    }
-}
+fn board_count() -> usize { unsafe { BOARDS.len() } }
 
-    fn tick(msec: u32, board_num: u32) {
+fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
+
+fn tick(msec: u32, board_num: u32) {
         /*
     unsafe {
         let f = move || -> glib::Continue {
@@ -287,4 +298,4 @@ fn board_count() -> usize {
             glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
         }
 */
-    }
+}
