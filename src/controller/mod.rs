@@ -1,12 +1,8 @@
 mod imp;
 
-use gtk::subclass::prelude::*;
 use gtk::{gio, glib};
-use gtk::prelude::IsA;
-use gtk::Widget;
-use gtk::prelude::GridExt;
 use gtk::glib::closure_local;
-use crate::Board;
+use gtk::subclass::prelude::*;
 use gtk::prelude::ObjectExt;
 
 glib::wrapper! {
@@ -22,14 +18,14 @@ impl Controller {
             "board-report",
             false,
             closure_local!(|ctrlr: Controller, id: u32, points: u32, lines: u32| {
-                &ctrlr.imp().piece_crashed(id, points, lines);
+                let _ = &ctrlr.imp().piece_crashed(id, points, lines);
             }),
         );
         controller.connect_closure(
             "mouse-click",
             false,
             closure_local!(|ctrlr: Controller, id: u32, button: u32, | {
-                &ctrlr.imp().mouse_click(id, button);
+                let _ = &ctrlr.imp().mouse_click(id, button);
             }),
         );
         controller

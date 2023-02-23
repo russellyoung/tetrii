@@ -8,7 +8,6 @@ mod controller;
 use config::Config;
 use options::Options;
 use board::Board;
-use gtk::subclass::prelude::ObjectSubclassIsExt;
 use gtk::{CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION};
 use gtk::gdk::Display;
 

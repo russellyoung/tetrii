@@ -1,20 +1,16 @@
-use self::glib::{BindingFlags, ParamSpec, ParamSpecInt, Value};
-use gtk::glib;
+//use self::glib::{BindingFlags, ParamSpec, ParamSpecInt, Value};
+use fastrand;
+use std::cell::RefCell;
+use std::rc::Rc;
+use once_cell::sync::OnceCell;
+
+use gtk::{Widget, glib};
 use gtk::CompositeTemplate;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use once_cell::sync::Lazy;
-use once_cell::sync::OnceCell;
 use gtk::glib::subclass::Signal;
-use fastrand;
-
-use gtk::prelude::GridExt;
-use std::cell::Cell;
-use std::cell::RefCell;
-use std::rc::Rc;
-use crate::controller::Controller;
-use gtk::Widget;
 use gtk::glib::clone;
+use gtk::prelude::GridExt;
 
 //
 // Boilerplate
@@ -51,7 +47,7 @@ struct Internal {
 
 const SS_NEW_PIECE: u32 = 0x1;    // the current piece is a new one, draw all squares without checking if they are already on
 const SS_PREVIEW:   u32 = 0x2;    // flag to do preview, simpler than getting it from he main structure
-const SS_STARTED:   u32 = 0x4;
+// const SS_STARTED:   u32 = 0x4;
 
 // This is just a dummy for initialization purposes
 impl Default for Internal {
@@ -131,20 +127,19 @@ impl BoxImpl for Board {}
 use crate::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_SELECT, CMD_DESELECT, CMD_CHEAT_END, CMD_CHEAT};
 
 static PIECES: [Piece; 7] = [
-    Piece {name: &"Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], pos: 0, },
-    Piece {name: &"Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], pos: 1, },
-    Piece {name: &"Square",     points: [ 4, 4,  4, 4, ], masks: [0x0660, 0x0660, 0x0660, 0x0660, ], pos: 2, },
-    Piece {name: &"Zee",        points: [ 5, 3,  5, 3, ], masks: [0x0360, 0x0462, 0x0360, 0x0462, ], pos: 3, },
-    Piece {name: &"ReverseZee", points: [ 5, 3,  5, 3, ], masks: [0x0630, 0x0264, 0x0630, 0x0264, ], pos: 4, },
-    Piece {name: &"El",         points: [ 6, 6,  3, 3, ], masks: [0x0470, 0x0322, 0x0071, 0x0226, ], pos: 5, },
-    Piece {name: &"ReverseEl",  points: [ 3, 3,  6, 6, ], masks: [0x0740, 0x2230, 0x0170, 0x0622, ], pos: 6, },
+    Piece {name: &"Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], },
+    Piece {name: &"Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], },
+    Piece {name: &"Square",     points: [ 4, 4,  4, 4, ], masks: [0x0660, 0x0660, 0x0660, 0x0660, ], },
+    Piece {name: &"Zee",        points: [ 5, 3,  5, 3, ], masks: [0x0360, 0x0462, 0x0360, 0x0462, ], },
+    Piece {name: &"ReverseZee", points: [ 5, 3,  5, 3, ], masks: [0x0630, 0x0264, 0x0630, 0x0264, ], },
+    Piece {name: &"El",         points: [ 6, 6,  3, 3, ], masks: [0x0470, 0x0322, 0x0071, 0x0226, ], },
+    Piece {name: &"ReverseEl",  points: [ 3, 3,  6, 6, ], masks: [0x0740, 0x2230, 0x0170, 0x0622, ], },
 ];
 
 #[derive(Debug)]
 pub struct Piece {
     // NAME is used to identify the piece. It also is the name of the CSS class used to draw the piece.
     name: &'static str,
-    pos: usize,
     // These arrays give the values for each piece. There are 4 for each - some pieces need fewer (BAR
     // needs 2, SQUARE needs 1), but rather than deal with different length vectors it is simpler just
     // to repeat the values until there are 4.
@@ -249,7 +244,7 @@ impl Board {
             self.update_score();
         }
         let show_preview = self.show_preview();
-        let mut old_pos = 0;
+        let old_pos = 0;
         {
             let mut internal = self.internal.borrow_mut();
             // prepare for next piece: reinitialize state for the new piece
@@ -261,7 +256,6 @@ impl Board {
         }
         {
             let internal = self.internal.borrow();
-            old_pos = internal.piece.0.pos;
             if !self.can_move(internal.piece.0.mask(internal.orientation), internal.xy) {
                 // send message to main program
                 return false;
@@ -380,7 +374,7 @@ impl Board {
         to_remove.iter().for_each(|x| self.remove_row(*x));
 
 		// finally update the bitmap. This must be done bottom-to-top to maintain the offsets, and then add the new empty rows on top
-		let mut bitmap = &mut self.internal.borrow_mut().bitmap;
+		let bitmap = &mut self.internal.borrow_mut().bitmap;
 		for board_row in to_remove.iter().rev() {
 			// +2: move to bitmap coords
 			bitmap.remove((board_row + 2) as usize);
@@ -397,7 +391,6 @@ impl Board {
         // move down all cells above this row. Row is in board coords
 		for y in (0..row + 1).rev() {
             for x in 0..self.width() as i32 {
-                let lc = self.get_cell_color(x, y);
                 let upper_color = self.get_cell_color(x, y - 1);
                 if upper_color != self.get_cell_color(x, y) {
                     self.set_cell_color((x, y), &upper_color);

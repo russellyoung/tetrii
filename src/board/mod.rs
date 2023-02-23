@@ -1,15 +1,9 @@
 mod imp;
 
-use gtk::subclass::prelude::*;
 use gtk::{gio, glib};
-use gtk::prelude::IsA;
-use gtk::Widget;
-use gtk::prelude::GridExt;
-use gtk::prelude::WidgetExt;
-use gtk::prelude::BoxExt;
-use once_cell::sync::OnceCell;
 use gtk::glib::closure_local;
-use gtk::prelude::ObjectExt;
+use gtk::subclass::prelude::*;
+use gtk::prelude::{GridExt, WidgetExt, ObjectExt, BoxExt};
 
 glib::wrapper! {
     pub struct Board(ObjectSubclass<imp::Board>)
@@ -19,10 +13,10 @@ glib::wrapper! {
 impl Board {
     pub fn new (id: u32, width: u32, height: u32, preview: bool) -> Self {
         let board: Board = glib::Object::builder().build();
-        board.imp().width_oc.set(width);
-        board.imp().height_oc.set(height);
-        board.imp().show_preview_oc.set(preview);
-        board.imp().id_oc.set(id);
+        let _ = board.imp().width_oc.set(width);
+        let _ = board.imp().height_oc.set(height);
+        let _ = board.imp().show_preview_oc.set(preview);
+        let _ = board.imp().id_oc.set(id);
         let this: &imp::Board = board.imp();
         this.playing_area.set_focusable(true);
         for x in 0..width {
@@ -40,7 +34,7 @@ impl Board {
         board.connect_closure(
             "board-command",
             false,
-            closure_local!(|b: Board, id: u32, mask: u32| {
+            closure_local!(|b: Board, _id: u32, mask: u32| {
                 b.imp().do_command(mask);
             }),
         );

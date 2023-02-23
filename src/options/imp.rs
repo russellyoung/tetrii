@@ -1,10 +1,8 @@
-use gtk::prelude::*;
-use gtk::subclass::prelude::*;
-//use gtk::glib;
-use gtk::prelude::GridExt;
+use crate::controller::Controller;
 use gtk::{glib, CompositeTemplate};
 use gtk::glib::clone;
-use crate::controller::Controller;
+use gtk::prelude::*;
+use gtk::subclass::prelude::*;
 
 //#[derive(Debug, Default)]
 #[derive(Debug, Default, CompositeTemplate)]
@@ -71,7 +69,7 @@ impl ObjectImpl for Options {
 
 impl Options {
     pub fn set_values(&self, count: u32, width: u16, height: u16, preview: bool) {
-        self.boardcount.set_property("selected", (count - 1));
+        self.boardcount.set_property("selected", count - 1);
         self.width.set_property("selected", (width - 8) as u32);
         self.height.set_property("selected", (height - 10) as u32);
         self.preview_check.set_active(preview);

@@ -1,18 +1,17 @@
+use crate::Board;
+use std::rc::Rc;
+use std::collections::HashMap;
+
+use gtk::{glib, CompositeTemplate};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-//use gtk::glib;
-use gtk::prelude::GridExt;
-use gtk::{glib, CompositeTemplate};
 use gtk::glib::clone;
-use crate::Board;
-use gtk::glib::closure_local;
-use once_cell::sync::Lazy;
-use std::collections::HashMap;
-use once_cell::sync::OnceCell;
-use std::cell::{RefCell, Cell};
-use gdk4::ModifierType;
-use std::rc::Rc;
 use gtk::glib::subclass::Signal;
+use gdk4::ModifierType;
+
+// this gives a warning as unused, but removing it breaks the Default for Internal
+use std::cell::{RefCell, Cell};
+use once_cell::sync::Lazy;
 
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
 pub enum State {#[default] Paused, Running, Finished, }
@@ -72,31 +71,28 @@ impl ObjectImpl for Controller {
         self.parent_constructed();
         let gcontroller = self.obj();
         let controller = self;
-        let x: i32 = 17;
-        unsafe {
-            controller.quit_buttonx.connect_clicked(clone!(@weak gcontroller => move |_| gcontroller.destroy()));
-            
-            let key_handler = gtk::EventControllerKey::new();
-            controller.obj().add_controller(&key_handler);
-            let internal = Rc::clone(&self.internal);
-            key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
-                do_command(&internal, keyboard_input(key, state));
-                gtk::Inhibit(false)
-            });
-/*
-            let gesture = gtk::GestureClick::new();
-            gesture.connect_pressed(|gesture, id, button| {
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                do_command(&internal, mouse_input(button));
-                gtk::Inhibit(false)
-            });
-            controller.obj().add_controller(&gesture);
-             */
-        }
+        controller.quit_buttonx.connect_clicked(clone!(@weak gcontroller => move |_| gcontroller.destroy()));
+        
+        let key_handler = gtk::EventControllerKey::new();
+        controller.obj().add_controller(&key_handler);
+        let internal = Rc::clone(&self.internal);
+        key_handler.connect_key_pressed(move |_ctlr, key, _code, state| {
+            do_command(&internal, keyboard_input(key, state));
+            gtk::Inhibit(false)
+        });
+		/*
+        let gesture = gtk::GestureClick::new();
+        gesture.connect_pressed(|gesture, id, button| {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        do_command(&internal, mouse_input(button));
+        gtk::Inhibit(false)
+    });
+        controller.obj().add_controller(&gesture);
+         */
     }
 
     fn signals() -> &'static [Signal] {
-        use once_cell::sync::Lazy;
+//        use once_cell::sync::Lazy;
         static SIGNALS: Lazy<Vec<Signal>> = Lazy::new(|| {
             vec![Signal::builder("board-report")
                  // board id, points, lines
@@ -139,21 +135,7 @@ pub enum Command {Left,               // commands that are sent to the Boards
 }
 
 // command mask used to send to BOARD. All others are handled locally
-use crate::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_SELECT, CMD_DESELECT, CMD_CHEAT_END, CMD_CHEAT};
-
-impl Command {
-    fn get_mask(&self) -> Option<u32> {
-        match self {
-            Command::Left             => Some(CMD_LEFT),
-            Command::Right            => Some(CMD_RIGHT),
-            Command::Down             => Some(CMD_DOWN), 
-            Command::Clockwise        => Some(CMD_CLOCKWISE), 
-            Command::CounterClockwise => Some(CMD_COUNTERCLOCKWISE),
-            Command::Cheat(code)      => Some(CMD_CHEAT + code),
-            _                         => None,
-        }
-    }
-}
+use crate::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_SELECT, CMD_DESELECT, CMD_CHEAT};
 
 // default commands
 const COMMANDS:[(&str, Command); 31] =
@@ -213,14 +195,14 @@ impl Controller {
         self.total_lines.set_label(&internal.score.1.to_string());
     }
 
-    pub fn mouse_click(&self, id: u32, button: u32) {
+    pub fn mouse_click(&self, _id: u32, button: u32) {
         let internal = Rc::clone(&self.internal);
         do_command(&internal, mouse_input(button));
     }
 }
 
 fn do_command(internal: &Rc<RefCell<Internal>>, command: Command) {
-    let mut id = { internal.borrow().active};
+    let id = { internal.borrow().active};
     match command {
         // board commands
         Command::Left => send_command(id, CMD_LEFT), 
@@ -262,11 +244,8 @@ fn mouse_input(button: u32) -> Command {
 
 fn send_command(id: usize, mask: u32) {
     let id_u32 = id as u32;
-    let extra = 4;
     if id < board_count() {
-        unsafe {
-            BOARDS[id].emit_by_name::<()>("board-command", &[&id_u32, &mask, ]);
-        }
+        board(id).emit_by_name::<()>("board-command", &[&id_u32, &mask, ]);
     }
 }
 
@@ -283,11 +262,14 @@ fn board_count() -> usize { unsafe { BOARDS.len() } }
 
 fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
 
-fn tick(msec: u32, board_num: u32) {
-        /*
+fn tick(msec: u32, board_id: u32) {
+	/*
     unsafe {
         let f = move || -> glib::Continue {
             glib::Continue(
+				send_command(board_id, CMD_DOWN);
+                glib::Continue(success)
+				
                 if mut_board.substate & SS_DROPPING != 0 { true }                      // continue the timer, but don't move the piece
                     else if mut_board.substate & (SS_PAUSED | SS_OVER) > 0 { false } // stop if paused or finished
                     else {
@@ -297,5 +279,5 @@ fn tick(msec: u32, board_num: u32) {
             };
             glib::timeout_add_local(core::time::Duration::from_millis(msec), f);
         }
-*/
+	 */
 }
