@@ -16,7 +16,7 @@
 .empty {  }
 
 .playingarea {
-  background-color: green;
+  background-color: #eee;
   border: solid 5px;
   border-color: black;
 }

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use once_cell::sync::OnceCell;
 
-use gtk::{Widget, glib};
+use gtk::{Widget, Root, glib};
 use gtk::CompositeTemplate;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -217,7 +217,8 @@ impl Board {
     fn show_preview(&self) -> bool { *self.show_preview_oc.get().unwrap() }
     // TODO: get via css ID?
 	// Is this considered good practice?
-    fn controller(&self) -> Widget { self.obj().parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap() }
+//    fn controller(&self) -> Widget { self.obj().parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap() }
+    fn controller(&self) -> Root { self.obj().root().unwrap() }
     
     
     // Most initializes correctly by default, BITMAP relies on height and width
@@ -240,10 +241,15 @@ impl Board {
         // The first time through there is no old piece to record on the bitmap. In subsequent calls the old piece
         // needs to be transferred to the bitmap before loading a new one
         if !initial {
-            self.add_piece_to_bitmap();
+            if !self.add_piece_to_bitmap() {
+				// I'm not sure if this gets hit, it usually is the below one
+				self.controller().emit_by_name::<()>("board-lost", &[&self.id(), ]);
+				return false;
+			}
             self.update_score();
         }
         let show_preview = self.show_preview();
+		let mut finished = false;
         let old_pos = 0;
         {
             let mut internal = self.internal.borrow_mut();
@@ -257,7 +263,7 @@ impl Board {
         {
             let internal = self.internal.borrow();
             if !self.can_move(internal.piece.0.mask(internal.orientation), internal.xy) {
-                // send message to main program
+				self.controller().emit_by_name::<()>("board-lost", &[&self.id(), ]);
                 return false;
             }
         }
@@ -345,6 +351,7 @@ impl Board {
     // BITMAP has padding of 2 bits on left, right, and bottom to make sure the mask always
     // is fully contained in the bitmap
     fn can_move(&self, mut mask: u16, xy: (i32, i32)) -> bool {
+		if xy.1 > 0xffff {return false; }    // LOSE
         let bitmap = &self.internal.borrow().bitmap;
         let mut row: usize = (xy.1 + 2) as usize;
         while mask != 0 {
@@ -375,12 +382,11 @@ impl Board {
 
 		// finally update the bitmap. This must be done bottom-to-top to maintain the offsets, and then add the new empty rows on top
 		let bitmap = &mut self.internal.borrow_mut().bitmap;
-		for board_row in to_remove.iter().rev() {
+		let new_row_mask:u32 = 0xffffffff & !(((1 << self.width()) - 1) << 2);  // mask is -1 with the bits representing the playing area cleared
+		for board_row in &to_remove {
+			// working from top down, delete a row and replace it with a blank one on top
 			// +2: move to bitmap coords
 			bitmap.remove((board_row + 2) as usize);
-		}
-		let new_row_mask:u32 = 0xffffffff & !(((1 << self.width()) - 1) << 2);  // mask is -1 with the bits representing the playing area cleared
-		for _ in 0..to_remove.len() {
 			bitmap.insert(0, new_row_mask);
 		}
 		let len: u32 = to_remove.len() as u32;
@@ -460,8 +466,9 @@ impl Board {
         internal.state &= !SS_NEW_PIECE;
     }
     
-    fn add_piece_to_bitmap(&self) {
+    fn add_piece_to_bitmap(&self) -> bool {
         let mut internal = self.internal.borrow_mut();
+		if internal.xy.1 < 0 {return false; }    // LOSE
         let mut mask = internal.piece.0.mask(internal.orientation) as u32;
         let mut row = internal.xy.1 as usize;
         while mask != 0 {
@@ -469,6 +476,7 @@ impl Board {
             mask >>= 4;
             row += 1;
         }
+		true
     }
     
     // lowest level functions
@@ -517,6 +525,7 @@ impl Board {
 }
 
 // set this up and use with init_bitmap_to() for debugging special cases (get data from cheat 11)
+/*
 const BITARRAY: [u32; 24] = [
     0x007FF003,
     0x017FF003,
@@ -542,4 +551,31 @@ const BITARRAY: [u32; 24] = [
     0x157FFFF7,
     0x167FFFFF,
     0x177FFFFF,
+];
+ */
+const BITARRAY: [u32; 24] = [
+    0xFFFF0003,
+    0xFFFF0003,
+    0xFFFF0003,
+    0xFFFF0003,
+    0xFFFF0003,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFF0FFF,
+    0xFFFFFFFF,
+    0xFFFFFFFF,
 ];
