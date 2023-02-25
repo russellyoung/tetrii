@@ -52,19 +52,10 @@ fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
 fn boards_reset() { unsafe { BOARDS.clear(); }}
 fn boards_add(board: Board) { unsafe { BOARDS.push(board); }}
 
-fn command_map_get(key: &String) -> Command { *COMMANDMAP.get(key).unwrap_or(&Command::Nop)}
-
 fn timers(which: usize) -> &'static StepTimer { unsafe { &TIMERS[which] } }
 fn timers_mut() -> &'static mut Lazy<Vec<StepTimer>>{ unsafe { &mut TIMERS }}
-// fn timers(board_id: usize) { //-> &'static mut StepTimer {
-// 	unsafe {
-// 		//&TIMERS.as_mut().unwrap().as_mut_slice()[board_id as usize]
-// 	}
-// }
 fn timers_add(mut timer: StepTimer) { unsafe { TIMERS.push(timer);}}
-fn timers_reset() {
-	unsafe { TIMERS.clear();}
-}
+fn timers_reset() { unsafe { TIMERS.clear();} }
 
 
 //
@@ -76,6 +67,7 @@ static COMMANDMAP: Lazy<HashMap<String, Command>> = Lazy::new(|| {
     COMMANDS.iter().for_each(|desc| { hashmap.insert(desc.0.to_string(), desc.1); });
     hashmap
 });
+fn command_map_get(key: &String) -> Command { *COMMANDMAP.get(key).unwrap_or(&Command::Nop)}
 
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
 pub enum State {#[default] Initial, Paused, Running, Finished, }
@@ -204,7 +196,7 @@ pub enum Command {Left,               // commands that are sent to the Boards
 }
 
 // command mask used to send to BOARD. All others are handled locally
-use crate::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_SELECT, CMD_DESELECT, CMD_CHEAT};
+use crate::board::imp::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_SELECT, CMD_DESELECT, CMD_CHEAT};
 
 // default commands
 const COMMANDS:[(&str, Command); 46] =

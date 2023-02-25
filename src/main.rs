@@ -8,11 +8,13 @@ mod controller;
 use config::Config;
 use options::Options;
 use board::Board;
+
+use std::fs;
+use std::env;
+use std::path::Path;
 use gtk::{CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION};
 use gtk::gdk::Display;
-
 use gtk::prelude::*;
-use std::fs;
 
 const APP_ID: &str = "com.young-0.tetrii.rust";
 
@@ -34,23 +36,27 @@ fn main() {
     app.run_with_args(&empty);
 }
 
+// read the css file. If it is not in the current directory go pu the tree to look for it. This way
+// the program will run from any of the crate subdirectories.
 fn load_css(filename: &str) {
+    let mut path = env::current_dir().unwrap();
+	path.push(filename);
+    let mut css_data = fs::read(&path);//.expect("could not find CSS file");
+	while css_data.is_err() {
+		path.pop();
+		if !path.pop() {
+			panic!("Cannot find file {} anywhere on the current trunk, file is required for program to run", filename);
+		}
+		path.push(filename);
+		css_data = fs::read(&path);//.expect("could not find CSS file");
+	}
     let provider = CssProvider::new();
-    let css_data = fs::read(filename).expect("could not find CSS file");
-    provider.load_from_data(&css_data);
+    provider.load_from_data(&css_data.unwrap());
     StyleContext::add_provider_for_display(
         &Display::default().expect("Could not connect to a display."),
         &provider,
         STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 }
-pub const CMD_LEFT: u32             = 1;
-pub const CMD_RIGHT: u32            = 2;
-pub const CMD_DOWN: u32             = 3;
-pub const CMD_CLOCKWISE: u32        = 4;
-pub const CMD_COUNTERCLOCKWISE: u32 = 5;
-pub const CMD_SELECT: u32           = 6;
-pub const CMD_DESELECT: u32         = 7;
-pub const CMD_CHEAT: u32            = 0x80000000;
-pub const CMD_CHEAT_END: u32        = 0x80000100;
+
 

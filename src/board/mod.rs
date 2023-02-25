@@ -1,4 +1,4 @@
-mod imp;
+pub mod imp;
 
 use gtk::{gio, glib};
 use gtk::glib::closure_local;

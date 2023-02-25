@@ -124,7 +124,15 @@ impl BoxImpl for Board {}
 //////////////////////////////////////////////////////////////////
 
 // command mask used to send to BOARD. All others are handled in the controller
-use crate::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_SELECT, CMD_DESELECT, CMD_CHEAT_END, CMD_CHEAT};
+pub const CMD_LEFT: u32             = 1;
+pub const CMD_RIGHT: u32            = 2;
+pub const CMD_DOWN: u32             = 3;
+pub const CMD_CLOCKWISE: u32        = 4;
+pub const CMD_COUNTERCLOCKWISE: u32 = 5;
+pub const CMD_SELECT: u32           = 6;
+pub const CMD_DESELECT: u32         = 7;
+pub const CMD_CHEAT: u32            = 0x80000000;
+pub const CMD_CHEAT_END: u32        = 0x80000100;
 
 static PIECES: [Piece; 7] = [
     Piece {name: &"Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], },
