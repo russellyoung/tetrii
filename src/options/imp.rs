@@ -76,7 +76,7 @@ impl Options {
     }
         
     fn make_controller(&self, ) {
-        Controller::new(
+        Controller::new_ref(
             &self.obj().application().unwrap(),
             self.boardcount.selected() + 1,
             self.width.selected() + 8,

@@ -27,14 +27,25 @@ use once_cell::sync::Lazy;
 // The accessors do no checking, they are for internal use.
 //
 //////////////////////////////////////////////////////////////////
-static mut STATE: State = State::Initial;
+static mut CONTROLLER: Option<crate::controller::Controller> = None;
+
+pub(super) fn has_instance() -> bool { unsafe { CONTROLLER.is_some() }}
+pub(super) fn set_instance(controller: crate::controller::Controller) { unsafe { CONTROLLER = Some(controller); }}
+pub(super) fn controller_full() -> &'static crate::controller::Controller { unsafe { CONTROLLER.as_ref().unwrap() }}
+fn controller<'a>() -> &'a Controller {
+	unsafe {
+		if CONTROLLER.is_none() {
+			panic!("Request for controller when none is set");
+		}
+		CONTROLLER.as_ref().unwrap().imp()
+	}
+}
 
 static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(|| Vec::new());
 // Timer handling is a little trick, since each board can have two running at once, and more can be started before one or both of them has
 // ended. The TickTimer object has its own flag to signal quit, and the Drop timer links to its Step timer so both stop.
 static mut OLD_TIMERS: Option<Vec<Timer>> = None;
 static mut TIMERS: Option<Vec<StepTimer>> = None;
-static mut MODIFIER_BITS: u32 = 0;
 
 static mut COMMANDMAP: Lazy<HashMap<String, Command>> = Lazy::new(|| {
     let mut hashmap: HashMap<String, Command> = HashMap::new();
@@ -49,20 +60,6 @@ fn boards_reset() { unsafe { BOARDS.clear(); }}
 fn boards_add(board: Board) { unsafe { BOARDS.push(board); }}
 
 fn command_map_get(key: &String) -> Command { unsafe {*COMMANDMAP.get(key).unwrap_or(&Command::Nop)}}
-
-fn state() -> State { unsafe { STATE }}
-fn state_set(state: State)  { unsafe { STATE = state }}
-
-fn modifier_bits_update(mask: u32, pressed: bool) { unsafe { if pressed { MODIFIER_BITS |= mask; } else { MODIFIER_BITS &= !mask; }}}
-fn modifier_bits_string(mut key: String) -> String {
-	unsafe {
-		if MODIFIER_BITS & ModifierType::SHIFT_MASK.bits() != 0 { key.push_str("-Shift"); }
-		if MODIFIER_BITS & ModifierType::ALT_MASK.bits() != 0 { key.push_str("-Alt"); }
-		if MODIFIER_BITS & ModifierType::CONTROL_MASK.bits() != 0 { key.push_str("-Ctrl"); }
-		if MODIFIER_BITS & ModifierType::META_MASK.bits() != 0 { key.push_str("-Meta"); }
-	}
-    key
-}
 
 fn timers(board_id: usize) { //-> &'static mut StepTimer {
 	unsafe {
@@ -126,6 +123,7 @@ struct Internal {
     score: (u32, u32),    // (points, completed lines)
     state: State,
     dropping: u32,        // mask telling if a board is currently dropping a piece
+	modifier_bits: u32,
 }
 
 #[glib::object_subclass]
@@ -148,18 +146,14 @@ impl ObjectImpl for Controller {
     fn constructed(&self) {
         self.parent_constructed();
         let gcontroller = self.obj();
-        let controller = self;
-        controller.quit_buttonx.connect_clicked(clone!(@weak gcontroller => move |_| gcontroller.destroy()));
-        controller.start_buttonx.connect_clicked( |button| {
-			button.root().unwrap().downcast::<Window>().unwrap().grab_focus();
-			StepTimer::start_all();
-        });
+        self.quit_buttonx.connect_clicked(clone!(@weak gcontroller => move |_| gcontroller.destroy()));
+        self.start_buttonx.connect_clicked( |button| { controller().toggle_state(); });
         let key_handler = gtk::EventControllerKey::new();
-        controller.obj().add_controller(&key_handler);
+        self.obj().add_controller(&key_handler);
         let internal = Rc::clone(&self.internal);
         key_handler.connect_key_pressed(move |_ctlr, key, _code, mods| {
 			set_modifier(key, true);
-            do_command(&internal, keyboard_input(key, mods));
+            controller().do_command(keyboard_input(key, mods));
             gtk::Inhibit(false)
         });
         key_handler.connect_key_released(move |_ctlr, key, _code, mods| {
@@ -278,11 +272,12 @@ const COMMANDS:[(&str, Command); 46] =
 ];
 
 impl Controller {
+	fn active_id(&self) -> usize { self.internal.borrow().active }
 	fn start(&self) {
 		println!("hi");
 	}
     pub fn initialize(&self, board_count: u32, width: u32, height: u32, preview: bool) {
-		state_set(State::Initial);
+		self.set_state(State::Initial);
         boards_reset();
 		timers_reset();
 		
@@ -293,10 +288,38 @@ impl Controller {
             boards_add(b);
 			timers_add(StepTimer::new(i, STARTING_TICK_MS, height));
         }
-		send_command(0, CMD_SELECT);
+		self.send_command(CMD_SELECT);
     }
 
+	fn toggle_state(&self) {
+		match self.internal.borrow().state {
+			State::Initial | State::Paused => self.set_state(State::Running),
+			State::Running => self.set_state(State::Paused),
+			State::Finished => ()
+		}
+	}
+
+	fn set_state(&self, state: State) {
+		match state {
+			State::Initial => {
+				self.start_buttonx.set_visible(true);
+				self.start_buttonx.set_label("Start");
+			},
+			State::Paused => {
+				self.start_buttonx.set_label("Continue");
+				StepTimer::stop_all();
+			},
+			State::Running => {
+				self.obj().grab_focus();
+				self.start_buttonx.set_label("Pause");
+				StepTimer::start_all();
+			},
+			State::Finished => self.start_buttonx.set_visible(false),
+		}
+		self.internal.borrow_mut().state = state;
+	}
     pub fn board_lost(&self, board_id: u32) { StepTimer::stop_all(); }
+
     pub fn piece_crashed(&self, board_id: u32, points: u32, lines: u32) {
 		let board_id: usize = board_id as usize;
 		unsafe {
@@ -317,78 +340,61 @@ impl Controller {
 
     pub fn mouse_click(&self, _id: u32, button: u32) {
         let internal = Rc::clone(&self.internal);
-        do_command(&internal, mouse_input(button));
+        self.do_command(mouse_input(button));
     }
 
-	fn toggle_state(&mut self) {
-		match state() {
-			State::Initial | State::Paused => self.set_state(State::Running),
-			State::Running => self.set_state(State::Paused),
-			State::Finished => ()
+	fn do_command(&self, command: Command) {
+		match command {
+			// board commands
+			Command::Left => self.send_command(CMD_LEFT), 
+			Command::Right => self.send_command(CMD_RIGHT),
+			Command::Down => self.send_command(CMD_DOWN),
+			Command::Clockwise => self.send_command(CMD_CLOCKWISE),
+			Command::CounterClockwise => self.send_command(CMD_COUNTERCLOCKWISE),
+			// controller commands
+			Command::Drop => self.do_drop(),
+			Command::Pause => (),
+			Command::Resume => (),
+			Command::TogglePause => (),
+			Command::SetBoard(new_id) => {self.internal.borrow_mut().active = self.set_board(new_id)},
+			Command::Nop => (),
+			Command::Cheat(code) => { if code < 20 {self.send_command(CMD_CHEAT | code)} else { self.controller_cheat(code); }},
 		}
 	}
 
-	fn set_state(&mut self, state: State) {
-		match state {
-			State::Paused => {
-				self.start_buttonx.set_label("Pause");
-				for i in 0..boards_len() {
-//					timers(i as u32).stop();
-				}
-			},
-			State::Initial | State::Running => {
-				self.start_buttonx.set_label("Running");
-				for i in 0..boards_len() {
-//					timers_add(TickTimer::new(i, 500, 20).start());
-				}
-			},
-			State::Finished => (),
+	fn set_board(&self, new_id: usize) -> usize {
+		let old_id = self.active_id();
+		if new_id >= boards_len() || new_id == old_id { return old_id; }
+		send_command_to(old_id, CMD_DESELECT);
+		send_command_to(new_id, CMD_SELECT);
+		new_id
+	}
+
+	fn controller_cheat(&self, code: u32) {
+		match code {
+			_ => (),
 		}
-		self.internal.borrow_mut().state = state;
+	}
+
+	fn do_drop(&self) {
+		unsafe { TIMERS.as_mut().unwrap()[self.active_id()].drop(); } }
+
+	fn send_command(&self, mask: u32) {
+		let id = self.active_id();
+		if id < boards_len() {
+			let id_u32 = self.active_id() as u32;
+			board(id).emit_by_name::<()>("board-command", &[&id_u32, &mask, ]);
+		}
 	}
 }
 
-fn do_command(internal: &Rc<RefCell<Internal>>, command: Command) {
-    let id = { internal.borrow().active};
-    match command {
-        // board commands
-        Command::Left => send_command(id, CMD_LEFT), 
-        Command::Right => send_command(id, CMD_RIGHT),
-        Command::Down => send_command(id, CMD_DOWN),
-        Command::Clockwise => send_command(id, CMD_CLOCKWISE),
-        Command::CounterClockwise => send_command(id, CMD_COUNTERCLOCKWISE),
-        // controller commands
-        Command::Drop => do_drop(id),
-        Command::Pause => (),
-        Command::Resume => (),
-        Command::TogglePause => (),
-        Command::SetBoard(new_id) => {internal.borrow_mut().active = set_board(id, new_id)},
-        Command::Nop => (),
-        Command::Cheat(code) => { if code < 20 {send_command(id, CMD_CHEAT | code)} else { controller_cheat(code, internal); }},
-    }
-}
-
-fn do_drop(id: usize) { unsafe { TIMERS.as_mut().unwrap()[id].drop(); } }
-
-fn send_command(id: usize, mask: u32) {
+fn send_command_to(id: usize, mask: u32) {
     let id_u32 = id as u32;
     if id < boards_len() {
         board(id).emit_by_name::<()>("board-command", &[&id_u32, &mask, ]);
     }
 }
 
-fn set_board(old_id: usize, new_id: usize) -> usize {
-	if new_id >= boards_len() || new_id == old_id { return old_id; }
-	send_command(old_id, CMD_DESELECT);
-	send_command(new_id, CMD_SELECT);
-	new_id
-}
-
-fn controller_cheat(code: u32, internal: &Rc<RefCell<Internal>>) {
-	match code {
-		_ => (),
-	}
-}
 
 //////////////////////////////////////////////////////////////////
 //
@@ -407,6 +413,15 @@ fn keyboard_input(key: gdk4::Key, modifiers: ModifierType) -> Command {
     command_map_get(&key_string)
 }
 
+fn modifier_bits_string(mut key: String) -> String {
+	let bits = controller().internal.borrow().modifier_bits;
+	if bits & ModifierType::SHIFT_MASK.bits() != 0 { key.push_str("-Shift"); }
+	if bits & ModifierType::ALT_MASK.bits() != 0 { key.push_str("-Alt"); }
+	if bits & ModifierType::CONTROL_MASK.bits() != 0 { key.push_str("-Ctrl"); }
+	if bits & ModifierType::META_MASK.bits() != 0 { key.push_str("-Meta"); }
+    key
+}
+
 fn set_modifier(key: gdk4::Key, pressed: bool) {
 	let name = key.to_lower().name().unwrap().to_string();
 	let mask = match &name[..] {
@@ -416,7 +431,9 @@ fn set_modifier(key: gdk4::Key, pressed: bool) {
 		"Meta_L"    | "Meta_R"    => ModifierType::META_MASK.bits(),
 		_ => return,
 	};
-	modifier_bits_update(mask, pressed);
+	let mut internal = controller().internal.borrow_mut();
+	if pressed { internal.modifier_bits  |= mask; }
+	else { internal.modifier_bits &= !mask; }
 }
 
 //////////////////////////////////////////////////////////////////
@@ -440,7 +457,7 @@ impl Timer {
 		let id = self.id;
 		let f = move || -> glib::Continue {
 			if quit_count.get() <= 0 { return glib::Continue(false); }
-			send_command(id, CMD_DOWN);
+			send_command_to(id, CMD_DOWN);
 			quit_count.set(quit_count.get() - 1);
 			glib::Continue(true)
 		};
