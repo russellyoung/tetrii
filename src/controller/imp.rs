@@ -15,7 +15,7 @@ use once_cell::sync::Lazy;
 
 //////////////////////////////////////////////////////////////////
 //
-// STATICS
+// STATIC MUTS
 //
 // I don't like statics in any language - they often are a lazy man's solution. Still, sometimes they are needed,
 // and these are the ones that either I can't avoid or are too much work to avoid (LMS). I also don't like using
@@ -29,6 +29,11 @@ use once_cell::sync::Lazy;
 //////////////////////////////////////////////////////////////////
 static mut CONTROLLER: Option<crate::controller::Controller> = None;
 
+static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(|| Vec::new());
+//static mut TIMERS: Option<Vec<StepTimer>> = None;
+static mut TIMERS: Lazy<Vec<StepTimer>> = Lazy::new(|| Vec::new());
+
+// CONTROLLER accessors
 pub(super) fn has_instance() -> bool { unsafe { CONTROLLER.is_some() }}
 pub(super) fn set_instance(controller: crate::controller::Controller) { unsafe { CONTROLLER = Some(controller); }}
 pub(super) fn controller_full() -> &'static crate::controller::Controller { unsafe { CONTROLLER.as_ref().unwrap() }}
@@ -41,55 +46,36 @@ fn controller<'a>() -> &'a Controller {
 	}
 }
 
-static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(|| Vec::new());
-// Timer handling is a little trick, since each board can have two running at once, and more can be started before one or both of them has
-// ended. The TickTimer object has its own flag to signal quit, and the Drop timer links to its Step timer so both stop.
-static mut OLD_TIMERS: Option<Vec<Timer>> = None;
-static mut TIMERS: Option<Vec<StepTimer>> = None;
-
-static mut COMMANDMAP: Lazy<HashMap<String, Command>> = Lazy::new(|| {
-    let mut hashmap: HashMap<String, Command> = HashMap::new();
-    COMMANDS.iter().for_each(|desc| { hashmap.insert(desc.0.to_string(), desc.1); });
-    hashmap
-});
-
 // BOARD accessors
 fn boards_len() -> usize { unsafe { BOARDS.len() } }
 fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
 fn boards_reset() { unsafe { BOARDS.clear(); }}
 fn boards_add(board: Board) { unsafe { BOARDS.push(board); }}
 
-fn command_map_get(key: &String) -> Command { unsafe {*COMMANDMAP.get(key).unwrap_or(&Command::Nop)}}
+fn command_map_get(key: &String) -> Command { *COMMANDMAP.get(key).unwrap_or(&Command::Nop)}
 
-fn timers(board_id: usize) { //-> &'static mut StepTimer {
-	unsafe {
-		//&TIMERS.as_mut().unwrap().as_mut_slice()[board_id as usize]
-	}
-}
-fn timers_add(mut timer: StepTimer) { unsafe { TIMERS.as_mut().unwrap().push(timer);}}
+fn timers(which: usize) -> &'static StepTimer { unsafe { &TIMERS[which] } }
+fn timers_mut() -> &'static mut Lazy<Vec<StepTimer>>{ unsafe { &mut TIMERS }}
+// fn timers(board_id: usize) { //-> &'static mut StepTimer {
+// 	unsafe {
+// 		//&TIMERS.as_mut().unwrap().as_mut_slice()[board_id as usize]
+// 	}
+// }
+fn timers_add(mut timer: StepTimer) { unsafe { TIMERS.push(timer);}}
 fn timers_reset() {
-	old_timers_reset();
-	unsafe { TIMERS = Some(Vec::new()); }
+	unsafe { TIMERS.clear();}
 }
 
-fn old_timers_add(timer: Timer) { unsafe { OLD_TIMERS.as_mut().unwrap().push(timer); }}
-fn old_timers_reset() { unsafe {if OLD_TIMERS.is_none() { OLD_TIMERS = Some(Vec::new()); }}}
-// my very own GC
-fn old_timers_clean() {
-	unsafe {
-		let old_timers = OLD_TIMERS.as_mut().unwrap();
-		let len = old_timers.len();
-		for i in (0..len).rev() {
-			if !old_timers[i].running() {
-				old_timers.swap_remove(i);
-			}
-		}
-	}
-}
 
 //
-// end STATIC
+// end STATIC MUTS
 //
+
+static COMMANDMAP: Lazy<HashMap<String, Command>> = Lazy::new(|| {
+    let mut hashmap: HashMap<String, Command> = HashMap::new();
+    COMMANDS.iter().for_each(|desc| { hashmap.insert(desc.0.to_string(), desc.1); });
+    hashmap
+});
 
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
 pub enum State {#[default] Initial, Paused, Running, Finished, }
@@ -292,7 +278,8 @@ impl Controller {
     }
 
 	fn toggle_state(&self) {
-		match self.internal.borrow().state {
+		let state = { self.internal.borrow().state };
+		match state {
 			State::Initial | State::Paused => self.set_state(State::Running),
 			State::Running => self.set_state(State::Paused),
 			State::Finished => ()
@@ -310,32 +297,27 @@ impl Controller {
 				StepTimer::stop_all();
 			},
 			State::Running => {
-				self.obj().grab_focus();
 				self.start_buttonx.set_label("Pause");
 				StepTimer::start_all();
 			},
 			State::Finished => self.start_buttonx.set_visible(false),
 		}
+		// in case Button grabbed it
+		self.obj().grab_focus();
 		self.internal.borrow_mut().state = state;
 	}
     pub fn board_lost(&self, board_id: u32) { StepTimer::stop_all(); }
 
     pub fn piece_crashed(&self, board_id: u32, points: u32, lines: u32) {
 		let board_id: usize = board_id as usize;
-		unsafe {
-			TIMERS.as_mut().unwrap()[board_id].stop();
-			//			timers(i).start();
-		}
+		timers_mut()[board_id].stop();
         let mut internal = self.internal.borrow_mut();
         internal.dropping &= !0x1 << board_id;
         let old_score = internal.score;
         internal.score = (old_score.0 + points, old_score.1 + lines);
         self.total_points.set_label(&internal.score.0.to_string());
         self.total_lines.set_label(&internal.score.1.to_string());
-		unsafe {
-			TIMERS.as_mut().unwrap()[board_id].start();
-			//			timers(i).start();
-		}
+		timers_mut()[board_id].start();
     }
 
     pub fn mouse_click(&self, _id: u32, button: u32) {
@@ -376,8 +358,7 @@ impl Controller {
 		}
 	}
 
-	fn do_drop(&self) {
-		unsafe { TIMERS.as_mut().unwrap()[self.active_id()].drop(); } }
+	fn do_drop(&self) { timers_mut()[self.active_id()].drop(); }
 
 	fn send_command(&self, mask: u32) {
 		let id = self.active_id();
@@ -468,38 +449,25 @@ impl Timer {
 	fn running(&self) -> bool { self.quit_count.get() > 0 }
 }
 
+// sends a DROP command to a board at regular intervals, handles both regular speed and drop speed
 struct StepTimer {
 	board_id: u32,
-	step_timer_v: Vec<Timer>,
-	drop_timer_v: Vec<Timer>,
+	step_timer_o: Option<Timer>,
+	drop_timer_o: Option<Timer>,
 	msecs: u32,
 	watchdog: i32,
 }
 
 impl StepTimer {
-	fn start_all() {
-		for i in 0..boards_len() {
-			unsafe {
-				TIMERS.as_mut().unwrap()[i].start();
-				//			timers(i).start();
-			}
-		}
-	}
-	fn stop_all() {
-		for i in 0..boards_len() {
-			unsafe {
-				TIMERS.as_mut().unwrap()[i].stop();
-				//			timers(i).start();
-			}
-		}
-	}
+	fn start_all() { for i in 0..boards_len() { timers_mut()[i].start(); } }
+	fn stop_all() { for i in 0..boards_len() { timers_mut()[i].stop(); } }
 	
 	fn new(board_id: u32, msecs: u32, height: u32) -> StepTimer {
 		StepTimer {board_id: board_id,
 				   msecs: msecs,
 				   watchdog: height as i32,
-				   step_timer_v: Vec::new(),
-				   drop_timer_v: Vec::new(), }
+				   step_timer_o: None,
+				   drop_timer_o: None, }
 	}
 
 	fn stop(&mut self) {
@@ -508,35 +476,35 @@ impl StepTimer {
 	}
 
 	fn stop_drop_timer(&mut self) {
-		if self.drop_timer_v.len() > 0 {
-			if self.drop_timer_v[0].running() {
-				self.drop_timer_v[0].stop();
+		if self.drop_timer_o.is_some() {
+			if self.drop_timer_o.as_ref().unwrap().running() {
+				self.drop_timer_o.as_ref().unwrap().stop();
 			}
-			old_timers_add(self.drop_timer_v.pop().unwrap());
+			self.drop_timer_o = None;
 		}
 	}
 	
 	fn stop_step_timer(&mut self) {
-		if self.step_timer_v.len() > 0 {
-			if self.step_timer_v[0].running() {
-				self.step_timer_v[0].stop();
+		if self.step_timer_o.is_some() {
+			if self.step_timer_o.as_ref().unwrap().running() {
+				self.step_timer_o.as_ref().unwrap().stop();
 			}
-			old_timers_add(self.step_timer_v.pop().unwrap());
+			self.step_timer_o = None;
 		}
 	}
 
 	fn start(&mut self) {
 		self.stop_step_timer();
 		self.stop_drop_timer();
-		self.step_timer_v.push(Timer::new(self.board_id, self.watchdog));
-		self.step_timer_v[0].start(self.msecs);
+		self.step_timer_o = Some(Timer::new(self.board_id, self.watchdog));
+		self.step_timer_o.as_ref().unwrap().start(self.msecs);
 	}
 
 	fn drop(&mut self) {
 		self.stop_step_timer();
 		self.stop_drop_timer();
-		self.drop_timer_v.push(Timer::new(self.board_id, self.watchdog));
-		self.drop_timer_v[0].start(self.msecs/DROP_RATIO);
+		self.drop_timer_o = Some(Timer::new(self.board_id, self.watchdog));
+		self.drop_timer_o.as_ref().unwrap().start(self.msecs/DROP_RATIO);
 	}
 
 	fn speedup(&mut self) { self.msecs = (self.msecs as f64 * SLOWDOWN_RATIO) as u32; }
