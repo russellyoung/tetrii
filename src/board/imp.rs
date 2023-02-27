@@ -13,6 +13,7 @@ use gtk::subclass::prelude::*;
 use gtk::glib::subclass::Signal;
 use gtk::glib::clone;
 use gtk::prelude::GridExt;
+use gtk::EventControllerMotion;
 
 //
 // Boilerplate
@@ -93,9 +94,6 @@ impl ObjectImpl for Board {
                  // board ID, command mask (CMD_*)
                  .param_types([u32::static_type(), u32::static_type()])
                  .build(),
-                 Signal::builder("mouse-click")
-                 .param_types([u32::static_type(), u32::static_type()])
-                 .build(),
             ]
         });
         SIGNALS.as_ref()
@@ -128,6 +126,11 @@ impl ObjectImpl for Board {
         }));
         gesture_right.set_button(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32);
         self.obj().add_controller(&gesture_right);
+
+		let enter_handler = EventControllerMotion::new();
+		enter_handler.connect_enter(clone!(@weak this => move |_w, _x, _y, | this.controller().emit_by_name::<()>("select", &[&this.id()])));
+        self.obj().add_controller(&enter_handler);
+		
     }
 }
 

@@ -37,6 +37,13 @@ impl Controller {
                 let _ = &ctrlr.imp().mouse_click(id, button);
             }),
         );
+        controller.connect_closure(
+            "select",
+            false,
+            closure_local!(|ctrlr: Controller, id: u32, | {
+                let _ = &ctrlr.imp().set_board(id);
+            }),
+        );
         controller
     }
 

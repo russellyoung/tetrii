@@ -88,7 +88,7 @@
 		  <object class="GtkBox">
 			<property name="orientation">horizontal</property>
 			<child>
-			  <object class="GtkButton" id="start_buttonx" >
+			  <object class="GtkButton" id="start_button" >
 				<style>
 				  <class name="box"/>
 				</style>
@@ -96,7 +96,7 @@
 			  </object>
 			</child>
 			<child>
-			  <object class="GtkButton" id="quit_buttonx" >
+			  <object class="GtkButton" id="quit_button" >
 				<style>
 				  <class name="quit-button"/>
 				</style>

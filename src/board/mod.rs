@@ -18,7 +18,7 @@ impl Board {
         let _ = board.imp().show_preview_oc.set(preview);
         let _ = board.imp().id_oc.set(id);
         let this: &imp::Board = board.imp();
-        this.playing_area.set_focusable(true);
+        this.obj().set_focusable(true);
         for x in 0..width {
             for y in 0..height {
                 this.playing_area.attach(&Board::make_cell(), x as i32, y as i32, 1, 1);
@@ -36,13 +36,6 @@ impl Board {
             false,
             closure_local!(|b: Board, _id: u32, mask: u32| {
                 b.imp().do_command(mask);
-            }),
-        );
-        board.connect_closure(
-            "mouse-click",
-            false,
-            closure_local!(|b: Board, board_num: u32| {
-                println!("Mouse click from {}: {:#?}", board_num, b);
             }),
         );
         board.imp().prepare();

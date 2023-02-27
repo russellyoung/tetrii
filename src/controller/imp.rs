@@ -30,7 +30,7 @@ fn controller<'a>() -> &'a Controller {
 
 // BOARD accessors
 fn boards_len() -> usize { unsafe { BOARDS.len() } }
-pub fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
+pub fn board(which: u32) -> &'static Board { unsafe { &BOARDS[which as usize] } }
 fn boards_reset() { unsafe { BOARDS.clear(); }}
 fn boards_add(board: Board) { unsafe { BOARDS.push(board); }}
 
@@ -61,15 +61,15 @@ pub struct Controller {
     #[template_child]
     pub total_lines: TemplateChild<gtk::Label>,
     #[template_child]
-    pub start_buttonx: TemplateChild<gtk::Button>,
+    pub start_button: TemplateChild<gtk::Button>,
     #[template_child]
-    pub quit_buttonx: TemplateChild<gtk::Button>,
+    pub quit_button: TemplateChild<gtk::Button>,
     //    pub grid: gtk::Grid,
 }
 
 #[derive(Debug, Default)]
 struct Internal {
-    active: usize,        // the board to direct commands to
+    active: u32,        // the board to direct commands to
     score: (u32, u32),    // (points, completed lines)
     state: State,
     dropping: u32,        // mask telling if a board is currently dropping a piece
@@ -96,11 +96,10 @@ impl ObjectImpl for Controller {
     fn constructed(&self) {
         self.parent_constructed();
         let gcontroller = self.obj();
-        self.quit_buttonx.connect_clicked(clone!(@weak gcontroller => move |_| {
-			println!("quit button");
+        self.quit_button.connect_clicked(clone!(@weak gcontroller => move |_| {
 			gcontroller.destroy();
 		}));
-        self.start_buttonx.connect_clicked( |_button| { controller().toggle_state(); });
+        self.start_button.connect_clicked( |_button| { controller().toggle_state(); });
         let key_handler = gtk::EventControllerKey::new();
         self.obj().add_controller(&key_handler);
         key_handler.connect_key_pressed(move |_ctlr, key, _code, _mods| {
@@ -111,19 +110,9 @@ impl ObjectImpl for Controller {
         key_handler.connect_key_released(move |_ctlr, key, _code, _mods| {
 			set_modifier(key, false);
         });
-		/*
-        let gesture = gtk::GestureClick::new();
-        gesture.connect_pressed(|gesture, id, button| {
-        gesture.set_state(gtk::EventSequenceState::Claimed);
-        do_command(&internal, mouse_input(button));
-        gtk::Inhibit(false)
-    });
-        controller.obj().add_controller(&gesture);
-         */
     }
 
     fn signals() -> &'static [Signal] {
-//        use once_cell::sync::Lazy;
         static SIGNALS: Lazy<Vec<Signal>> = Lazy::new(|| {
             vec![Signal::builder("board-report")
                  // board id, points, lines
@@ -136,6 +125,10 @@ impl ObjectImpl for Controller {
                  Signal::builder("mouse-click")
                  // board id, which-mouse
                  .param_types([u32::static_type(), u32::static_type(), ])
+                 .build(),
+                 Signal::builder("select")
+                 // board id, 
+                 .param_types([u32::static_type(), ])
                  .build(),
             ]
         });
@@ -164,7 +157,7 @@ pub enum Command {Left,               // commands that are sent to the Boards
                   Pause,
                   Resume,
                   TogglePause,
-                  SetBoard(usize),
+                  SetBoard(u32),
                   Cheat(u32),
                   #[default] Nop,
 }
@@ -243,7 +236,7 @@ const COMMANDS:[(&str, Command); 46] =
 ];
 
 impl Controller {
-	fn active_id(&self) -> usize { self.internal.borrow().active }
+	fn active_id(&self) -> u32 { self.internal.borrow().active }
     pub fn initialize(&self, board_count: u32, width: u32, height: u32, preview: bool) {
 		self.set_state(State::Initial);
         boards_reset();
@@ -269,24 +262,24 @@ impl Controller {
 	fn set_state(&self, state: State) {
 		match state {
 			State::Initial => {
-				self.start_buttonx.set_visible(true);
-				self.start_buttonx.set_label("Start");
+				self.start_button.set_visible(true);
+				self.start_button.set_label("Start");
 			},
 			State::Paused => {
-				self.start_buttonx.set_label("Continue");
+				self.start_button.set_label("Continue");
 				send_command_all(CMD_STOP);
 			},
 			State::Running => {
-				self.start_buttonx.set_label("Pause");
+				self.start_button.set_label("Pause");
 				send_command_all(CMD_START);
 			},
 			State::Finished => {
-				self.start_buttonx.set_visible(false);
+				self.start_button.set_visible(false);
 				send_command_all(CMD_STOP);
 			}
 		}
 		// in case Button grabbed it
-		self.obj().grab_focus();
+//		self.obj().grab_focus();
 		self.internal.borrow_mut().state = state;
 	}
 
@@ -319,19 +312,19 @@ impl Controller {
 				Command::Pause => (),
 				Command::Resume => (),
 				Command::TogglePause => (),
-				Command::SetBoard(new_id) => {self.internal.borrow_mut().active = self.set_board(new_id)},
+				Command::SetBoard(new_id) => self.set_board(new_id),
 				Command::Nop => (),
 				Command::Cheat(code) => { if code < 20 {self.send_command(CMD_CHEAT | code)} else { self.controller_cheat(code); }},
 			}
 		}
 	}
 
-	fn set_board(&self, new_id: usize) -> usize {
+	pub fn set_board(&self, new_id: u32) {
 		let old_id = self.active_id();
-		if new_id >= boards_len() || new_id == old_id { return old_id; }
+		if new_id >= boards_len() as u32 || new_id == old_id { return; }
 		send_command_to(old_id, CMD_DESELECT);
 		send_command_to(new_id, CMD_SELECT);
-		new_id
+		self.internal.borrow_mut().active = new_id;
 	}
 
 	// clippy warns here, but I want to leave it in this form to show future debugging can insert satements here
@@ -344,18 +337,18 @@ impl Controller {
 
 	fn send_command(&self, mask: u32) {
 		let id = self.active_id();
-		if id < boards_len() {
-			let id_u32 = self.active_id() as u32;
+		if id < boards_len() as u32 {
+			let id_u32 = self.active_id();
 			board(id).emit_by_name::<()>("board-command", &[&id_u32, &mask, ]);
 		}
 	}
 }
 
-fn send_command_all(mask: u32) { for id in 0..boards_len() {send_command_to(id, mask); } }
-fn send_command_to(id: usize, mask: u32) {
-    let id_u32 = id as u32;
-    if id < boards_len() {
-        board(id).emit_by_name::<()>("board-command", &[&id_u32, &mask, ]);
+fn send_command_all(mask: u32) { for id in 0..boards_len() as u32 {send_command_to(id, mask); } }
+
+fn send_command_to(id: u32, mask: u32) {
+    if id < boards_len() as u32 {
+        board(id).emit_by_name::<()>("board-command", &[&id, &mask, ]);
     }
 }
 
