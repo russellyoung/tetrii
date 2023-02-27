@@ -16,6 +16,8 @@ use gtk::{CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION};
 use gtk::gdk::Display;
 use gtk::prelude::*;
 
+use once_cell::sync::Lazy;
+
 const APP_ID: &str = "com.young-0.tetrii.rust";
 
 fn main() {
@@ -59,4 +61,18 @@ fn load_css(filename: &str) {
     );
 }
 
+//////////////////////////////////////////////////////////////////
+//
+// STATIC MUTS
+//
+// I don't like statics in any language - they often are a lazy man's solution. Still, sometimes they are needed,
+// and these are the ones that either I can't avoid or are too much work to avoid (LMS). I also don't like using
+// UNSAFE. The name gives the impression, I'm sure intentionally, that it is not encouraged. So, here also are
+// accessor functions to move all the UNSAFEs out of the rest of the code.
+//
+// (MORE)
+//////////////////////////////////////////////////////////////////
+static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(|| Vec::new());
+static mut CONTROLLER: Option<crate::controller::Controller> = None;
 
+fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }

@@ -1,6 +1,8 @@
 //use self::glib::{BindingFlags, ParamSpec, ParamSpecInt, Value};
+use crate::board;
 use fastrand;
 use std::cell::RefCell;
+use std::cell::Cell;
 use std::rc::Rc;
 use once_cell::sync::OnceCell;
 
@@ -43,16 +45,31 @@ struct Internal {
     piece_counts: [u32; 7],
     bitmap:       Vec<u32>,       // bitmap of board
     state:        u32,            // holds SS_ state bis
+	step_ms:      u32,
+	timer:        Timer,
 }
 
 const SS_NEW_PIECE: u32 = 0x1;    // the current piece is a new one, draw all squares without checking if they are already on
 const SS_PREVIEW:   u32 = 0x2;    // flag to do preview, simpler than getting it from he main structure
+const SS_DROPPING:  u32 = 0x4;
+
+const STARTING_TICK_MS: u32 = 500;
+const DROP_RATIO: f64 = 0.1;
+const SPEEDUP_RATIO: f64 = 0.9;
 // const SS_STARTED:   u32 = 0x4;
 
 // This is just a dummy for initialization purposes
 impl Default for Internal {
-    fn default() -> Internal { Internal { piece: (Piece::random(), Piece::random()), xy: (0, 0), orientation: Orientation::North,
-                                          score: (0, 0), piece_counts: [0; 7], bitmap: Vec::<u32>::new(), state: 0, }}
+    fn default() -> Internal { Internal { state: 0,
+										  piece: (Piece::random(), Piece::random()),
+										  xy: (0, 0),
+										  orientation: Orientation::North,
+                                          score: (0, 0),
+										  piece_counts: [0; 7],
+										  bitmap: Vec::<u32>::new(),
+										  step_ms: STARTING_TICK_MS,
+										  timer: Timer::new(0, 0, 0),
+	}}
 }
 
 #[glib::object_subclass]
@@ -131,6 +148,11 @@ pub const CMD_CLOCKWISE: u32        = 4;
 pub const CMD_COUNTERCLOCKWISE: u32 = 5;
 pub const CMD_SELECT: u32           = 6;
 pub const CMD_DESELECT: u32         = 7;
+
+pub const CMD_START: u32            = 8;
+pub const CMD_STOP: u32             = 9;
+pub const CMD_DROP: u32             = 10;
+
 pub const CMD_CHEAT: u32            = 0x80000000;
 pub const CMD_CHEAT_END: u32        = 0x80000100;
 
@@ -249,15 +271,10 @@ impl Board {
         // The first time through there is no old piece to record on the bitmap. In subsequent calls the old piece
         // needs to be transferred to the bitmap before loading a new one
         if !initial {
-            if !self.add_piece_to_bitmap() {
-				// I'm not sure if this gets hit, it usually is the below one
-				self.controller().emit_by_name::<()>("board-lost", &[&self.id(), ]);
-				return false;
-			}
+            if !self.add_piece_to_bitmap() { return self.lose(); }
             self.update_score();
         }
         let show_preview = self.show_preview();
-		let mut finished = false;
         let old_pos = 0;
         {
             let mut internal = self.internal.borrow_mut();
@@ -267,12 +284,15 @@ impl Board {
             internal.orientation = Orientation::North;
             internal.xy = ((self.width()/2 - 2) as i32, -1);
             internal.state |= SS_NEW_PIECE;
+            internal.state &= !SS_DROPPING;
+			internal.timer.stop();
+			internal.timer = Timer::new(self.id(), internal.step_ms, self.height());
+			if !initial {internal.timer.start();}
         }
         {
             let internal = self.internal.borrow();
             if !self.can_move(internal.piece.0.mask(internal.orientation), internal.xy) {
-				self.controller().emit_by_name::<()>("board-lost", &[&self.id(), ]);
-                return false;
+				return self.lose();
             }
         }
         if show_preview {
@@ -292,11 +312,21 @@ impl Board {
             CMD_CLOCKWISE => self.rotate_piece(CMD_CLOCKWISE),
 			CMD_SELECT => { self.playing_area.add_css_class("selected"); true},
 			CMD_DESELECT => { self.playing_area.remove_css_class("selected"); true},
+			CMD_START => self.start(),
+			CMD_STOP => {self.internal.borrow().timer.stop(); true},
+			CMD_DROP => self.drop_piece(),
             CMD_CHEAT..=CMD_CHEAT_END => self.do_cheat(bits & 0xfff),
             _ => true,
         };
     }
-    
+
+    fn start(&self) -> bool{
+		let mut internal = self.internal.borrow_mut();
+		internal.timer = Timer::new(self.id(), internal.step_ms, self.height());
+		internal.timer.start();
+		true
+	}
+
     fn translate_piece(&self, dx: i32, dy: i32) -> bool {
         let mut orientation = Orientation::North;
         {
@@ -324,6 +354,28 @@ impl Board {
         true
     }
     
+	fn drop_piece(&self) -> bool {
+		let new_timer: Timer;
+		{
+			let internal = self.internal.borrow();
+			if internal.state & SS_DROPPING != 0 { return false; }
+			let old_timer = &internal.timer;
+			let msecs = (internal.step_ms as f64 * DROP_RATIO) as u32;
+			new_timer = Timer::new(self.id(), msecs, old_timer.quit_count.get() as u32);
+			old_timer.stop();
+		}
+		let mut internal = self.internal.borrow_mut();
+		internal.state |= SS_DROPPING;
+		new_timer.start();
+		internal.timer = new_timer;
+		true
+	}
+
+	fn lose(&self) -> bool {
+		self.controller().emit_by_name::<()>("board-lost", &[&self.id(), ]);
+		return false;
+	}
+		
     fn do_cheat(&self, code: u32) -> bool {
         match code {
             0..=8 => {
@@ -530,6 +582,33 @@ impl Board {
             }
         }
     }
+}
+
+#[derive(Debug)]
+struct Timer {
+	board_id: u32,
+	quit_count: Rc<Cell<i32>>,
+	msecs: u32,
+}
+impl Timer {
+	fn new(board_id: u32, msecs: u32, quit_count: u32) -> Timer {
+		let quit_count_i32 = quit_count as i32;
+		Timer {board_id, msecs, quit_count: Rc::new(Cell::new(quit_count_i32)), }
+	}
+
+	// be sure to stop the old timer when starting a new one
+	fn start(&self) {
+		let quit_count = Rc::clone(&self.quit_count);
+		let board_id = self.board_id as usize;
+		let f = move || -> glib::Continue {
+			if quit_count.get() <= 0 { return glib::Continue(false); }
+			board(board_id).imp().do_command(CMD_DOWN);
+			quit_count.set(quit_count.get() - 1);
+			glib::Continue(true)
+		};
+        glib::timeout_add_local(core::time::Duration::from_millis(self.msecs as u64), f);
+	}
+	fn stop(&self) { self.quit_count.set(0); }
 }
 
 // set this up and use with init_bitmap_to() for debugging special cases (get data from cheat 11)

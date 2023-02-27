@@ -13,25 +13,8 @@ use gtk::Window;
 use std::cell::{RefCell, Cell};
 use once_cell::sync::Lazy;
 
-//////////////////////////////////////////////////////////////////
-//
-// STATIC MUTS
-//
-// I don't like statics in any language - they often are a lazy man's solution. Still, sometimes they are needed,
-// and these are the ones that either I can't avoid or are too much work to avoid (LMS). I also don't like using
-// UNSAFE. The name gives the impression, I'm sure intentionally, that it is not encouraged. So, here also are
-// accessor functions to move all the UNSAFEs out of the rest of the code.
-//
-// By using statics here for stuff that really belongs in the Controller I'm able to use functions for callbacks
-// rather than pass the controller around everywhere, getting "needs static lifetime" and "can't borrow" errors.
-// The accessors do no checking, they are for internal use.
-//
-//////////////////////////////////////////////////////////////////
-static mut CONTROLLER: Option<crate::controller::Controller> = None;
-
-static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(|| Vec::new());
-//static mut TIMERS: Option<Vec<StepTimer>> = None;
-static mut TIMERS: Lazy<Vec<StepTimer>> = Lazy::new(|| Vec::new());
+use crate::BOARDS;
+use crate::CONTROLLER;
 
 // CONTROLLER accessors
 pub(super) fn has_instance() -> bool { unsafe { CONTROLLER.is_some() }}
@@ -48,15 +31,9 @@ fn controller<'a>() -> &'a Controller {
 
 // BOARD accessors
 fn boards_len() -> usize { unsafe { BOARDS.len() } }
-fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
+pub fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
 fn boards_reset() { unsafe { BOARDS.clear(); }}
 fn boards_add(board: Board) { unsafe { BOARDS.push(board); }}
-
-fn timers(which: usize) -> &'static StepTimer { unsafe { &TIMERS[which] } }
-fn timers_mut() -> &'static mut Lazy<Vec<StepTimer>>{ unsafe { &mut TIMERS }}
-fn timers_add(mut timer: StepTimer) { unsafe { TIMERS.push(timer);}}
-fn timers_reset() { unsafe { TIMERS.clear();} }
-
 
 //
 // end STATIC MUTS
@@ -124,7 +101,10 @@ impl ObjectImpl for Controller {
     fn constructed(&self) {
         self.parent_constructed();
         let gcontroller = self.obj();
-        self.quit_buttonx.connect_clicked(clone!(@weak gcontroller => move |_| gcontroller.destroy()));
+        self.quit_buttonx.connect_clicked(clone!(@weak gcontroller => move |_| {
+			println!("quit button");
+			gcontroller.destroy();
+		}));
         self.start_buttonx.connect_clicked( |button| { controller().toggle_state(); });
         let key_handler = gtk::EventControllerKey::new();
         self.obj().add_controller(&key_handler);
@@ -132,7 +112,7 @@ impl ObjectImpl for Controller {
         key_handler.connect_key_pressed(move |_ctlr, key, _code, mods| {
 			set_modifier(key, true);
             controller().do_command(keyboard_input(key, mods));
-            gtk::Inhibit(false)
+            gtk::Inhibit(true)
         });
         key_handler.connect_key_released(move |_ctlr, key, _code, mods| {
 			set_modifier(key, false);
@@ -196,7 +176,18 @@ pub enum Command {Left,               // commands that are sent to the Boards
 }
 
 // command mask used to send to BOARD. All others are handled locally
-use crate::board::imp::{CMD_LEFT, CMD_RIGHT, CMD_DOWN, CMD_CLOCKWISE, CMD_COUNTERCLOCKWISE, CMD_SELECT, CMD_DESELECT, CMD_CHEAT};
+use crate::board::imp::{CMD_LEFT,
+						CMD_RIGHT,
+						CMD_DOWN,
+						CMD_CLOCKWISE,
+						CMD_COUNTERCLOCKWISE,
+						CMD_SELECT,
+						CMD_DESELECT,
+						CMD_CHEAT,
+						CMD_START,
+						CMD_STOP,
+						CMD_DROP,
+};
 
 // default commands
 const COMMANDS:[(&str, Command); 46] =
@@ -251,20 +242,15 @@ const COMMANDS:[(&str, Command); 46] =
 
 impl Controller {
 	fn active_id(&self) -> usize { self.internal.borrow().active }
-	fn start(&self) {
-		println!("hi");
-	}
     pub fn initialize(&self, board_count: u32, width: u32, height: u32, preview: bool) {
 		self.set_state(State::Initial);
         boards_reset();
-		timers_reset();
 		
         let container = &self.boards_container;
         for i in 0..board_count {
             let b = Board::new(i, width, height, preview);
             container.append(&b);
             boards_add(b);
-			timers_add(StepTimer::new(i, STARTING_TICK_MS, height));
         }
 		self.send_command(CMD_SELECT);
     }
@@ -286,30 +272,32 @@ impl Controller {
 			},
 			State::Paused => {
 				self.start_buttonx.set_label("Continue");
-				StepTimer::stop_all();
+				send_command_all(CMD_STOP);
 			},
 			State::Running => {
 				self.start_buttonx.set_label("Pause");
-				StepTimer::start_all();
+				send_command_all(CMD_START);
 			},
-			State::Finished => self.start_buttonx.set_visible(false),
+			State::Finished => {
+				self.start_buttonx.set_visible(false);
+				send_command_all(CMD_STOP);
+			}
 		}
 		// in case Button grabbed it
 		self.obj().grab_focus();
 		self.internal.borrow_mut().state = state;
 	}
-    pub fn board_lost(&self, board_id: u32) { StepTimer::stop_all(); }
+
+    pub fn board_lost(&self, board_id: u32) { self.set_state(State::Finished); }
 
     pub fn piece_crashed(&self, board_id: u32, points: u32, lines: u32) {
 		let board_id: usize = board_id as usize;
-		timers_mut()[board_id].stop();
         let mut internal = self.internal.borrow_mut();
         internal.dropping &= !0x1 << board_id;
         let old_score = internal.score;
         internal.score = (old_score.0 + points, old_score.1 + lines);
         self.total_points.set_label(&internal.score.0.to_string());
         self.total_lines.set_label(&internal.score.1.to_string());
-		timers_mut()[board_id].start();
     }
 
     pub fn mouse_click(&self, _id: u32, button: u32) {
@@ -326,7 +314,7 @@ impl Controller {
 			Command::Clockwise => self.send_command(CMD_CLOCKWISE),
 			Command::CounterClockwise => self.send_command(CMD_COUNTERCLOCKWISE),
 			// controller commands
-			Command::Drop => self.do_drop(),
+			Command::Drop => self.send_command(CMD_DROP),
 			Command::Pause => (),
 			Command::Resume => (),
 			Command::TogglePause => (),
@@ -350,8 +338,6 @@ impl Controller {
 		}
 	}
 
-	fn do_drop(&self) { timers_mut()[self.active_id()].drop(); }
-
 	fn send_command(&self, mask: u32) {
 		let id = self.active_id();
 		if id < boards_len() {
@@ -361,6 +347,7 @@ impl Controller {
 	}
 }
 
+fn send_command_all(mask: u32) { for id in 0..boards_len() {send_command_to(id, mask); } }
 fn send_command_to(id: usize, mask: u32) {
     let id_u32 = id as u32;
     if id < boards_len() {
@@ -409,96 +396,4 @@ fn set_modifier(key: gdk4::Key, pressed: bool) {
 	else { internal.modifier_bits &= !mask; }
 }
 
-//////////////////////////////////////////////////////////////////
-//
-// Timers
-//
-//////////////////////////////////////////////////////////////////
-
-
-
-
-struct Timer {
-	id: usize,
-	quit_count: Rc<Cell<i32>>,
-}
-
-impl Timer {
-	fn new(board_id: u32, quit_count: i32) -> Timer { Timer {id: board_id as usize, quit_count: Rc::new(Cell::new(quit_count)), }}
-	fn start(&self, msecs: u32) {
-		let quit_count = Rc::clone(&self.quit_count);
-		let id = self.id;
-		let f = move || -> glib::Continue {
-			if quit_count.get() <= 0 { return glib::Continue(false); }
-			send_command_to(id, CMD_DOWN);
-			quit_count.set(quit_count.get() - 1);
-			glib::Continue(true)
-		};
-        glib::timeout_add_local(core::time::Duration::from_millis(msecs as u64), f);
-	}
-
-	fn stop(&self) { self.quit_count.set(0); }
-	fn running(&self) -> bool { self.quit_count.get() > 0 }
-}
-
-// sends a DROP command to a board at regular intervals, handles both regular speed and drop speed
-struct StepTimer {
-	board_id: u32,
-	step_timer_o: Option<Timer>,
-	drop_timer_o: Option<Timer>,
-	msecs: u32,
-	watchdog: i32,
-}
-
-impl StepTimer {
-	fn start_all() { for i in 0..boards_len() { timers_mut()[i].start(); } }
-	fn stop_all() { for i in 0..boards_len() { timers_mut()[i].stop(); } }
-	
-	fn new(board_id: u32, msecs: u32, height: u32) -> StepTimer {
-		StepTimer {board_id: board_id,
-				   msecs: msecs,
-				   watchdog: height as i32,
-				   step_timer_o: None,
-				   drop_timer_o: None, }
-	}
-
-	fn stop(&mut self) {
-		self.stop_step_timer();
-		self.stop_drop_timer();
-	}
-
-	fn stop_drop_timer(&mut self) {
-		if self.drop_timer_o.is_some() {
-			if self.drop_timer_o.as_ref().unwrap().running() {
-				self.drop_timer_o.as_ref().unwrap().stop();
-			}
-			self.drop_timer_o = None;
-		}
-	}
-	
-	fn stop_step_timer(&mut self) {
-		if self.step_timer_o.is_some() {
-			if self.step_timer_o.as_ref().unwrap().running() {
-				self.step_timer_o.as_ref().unwrap().stop();
-			}
-			self.step_timer_o = None;
-		}
-	}
-
-	fn start(&mut self) {
-		self.stop_step_timer();
-		self.stop_drop_timer();
-		self.step_timer_o = Some(Timer::new(self.board_id, self.watchdog));
-		self.step_timer_o.as_ref().unwrap().start(self.msecs);
-	}
-
-	fn drop(&mut self) {
-		self.stop_step_timer();
-		self.stop_drop_timer();
-		self.drop_timer_o = Some(Timer::new(self.board_id, self.watchdog));
-		self.drop_timer_o.as_ref().unwrap().start(self.msecs/DROP_RATIO);
-	}
-
-	fn speedup(&mut self) { self.msecs = (self.msecs as f64 * SLOWDOWN_RATIO) as u32; }
-}
 
