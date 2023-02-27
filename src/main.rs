@@ -1,4 +1,4 @@
-#![allow(unused)]
+#![allow(dead_code)]
 
 mod board;
 mod config;
@@ -11,7 +11,6 @@ use board::Board;
 
 use std::fs;
 use std::env;
-use std::path::Path;
 use gtk::{CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION};
 use gtk::gdk::Display;
 use gtk::prelude::*;
@@ -28,7 +27,7 @@ fn main() {
     let width = config.width;
     let preview = config.preview;
     app.connect_activate(move |appx| {
-        load_css(&"style.css");     // needs app to be active before this can be done
+        load_css("style.css");     // needs app to be active before this can be done
         //let win = Board::new(app, 10, 20, 0);
         let  win = Options::new(appx);
         win.show();
@@ -72,7 +71,7 @@ fn load_css(filename: &str) {
 //
 // (MORE)
 //////////////////////////////////////////////////////////////////
-static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(|| Vec::new());
+static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(Vec::new);
 static mut CONTROLLER: Option<crate::controller::Controller> = None;
 
 fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }

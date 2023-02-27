@@ -8,9 +8,8 @@ use gtk::subclass::prelude::*;
 use gtk::glib::clone;
 use gtk::glib::subclass::Signal;
 use gdk4::ModifierType;
-use gtk::Window;
 // this gives a warning as unused, but removing it breaks the Default for Internal
-use std::cell::{RefCell, Cell};
+use std::cell::RefCell;
 use once_cell::sync::Lazy;
 
 use crate::BOARDS;
@@ -46,12 +45,8 @@ static COMMANDMAP: Lazy<HashMap<String, Command>> = Lazy::new(|| {
 });
 fn command_map_get(key: &String) -> Command { *COMMANDMAP.get(key).unwrap_or(&Command::Nop)}
 
-#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub enum State {#[default] Initial, Paused, Running, Finished, }
-
-const STARTING_TICK_MS: u32 = 500;
-const DROP_RATIO: u32 = 10;
-const SLOWDOWN_RATIO: f64 = 0.9;
 
 //#[derive(Debug, Default)]
 #[derive(Debug, Default, CompositeTemplate)]
@@ -105,16 +100,15 @@ impl ObjectImpl for Controller {
 			println!("quit button");
 			gcontroller.destroy();
 		}));
-        self.start_buttonx.connect_clicked( |button| { controller().toggle_state(); });
+        self.start_buttonx.connect_clicked( |_button| { controller().toggle_state(); });
         let key_handler = gtk::EventControllerKey::new();
         self.obj().add_controller(&key_handler);
-        let internal = Rc::clone(&self.internal);
-        key_handler.connect_key_pressed(move |_ctlr, key, _code, mods| {
+        key_handler.connect_key_pressed(move |_ctlr, key, _code, _mods| {
 			set_modifier(key, true);
-            controller().do_command(keyboard_input(key, mods));
+            controller().do_command(keyboard_input(key));
             gtk::Inhibit(true)
         });
-        key_handler.connect_key_released(move |_ctlr, key, _code, mods| {
+        key_handler.connect_key_released(move |_ctlr, key, _code, _mods| {
 			set_modifier(key, false);
         });
 		/*
@@ -175,6 +169,14 @@ pub enum Command {Left,               // commands that are sent to the Boards
                   #[default] Nop,
 }
 
+impl Command {
+	fn allowed(&self, state: &State) -> bool {
+		if state == &State::Running { true }
+		else if state == &State::Finished { false }
+		else { matches!(self, Command::Resume | Command::TogglePause) || matches!(self, Command::Cheat(_code))}
+	}
+}
+
 // command mask used to send to BOARD. All others are handled locally
 use crate::board::imp::{CMD_LEFT,
 						CMD_RIGHT,
@@ -191,53 +193,53 @@ use crate::board::imp::{CMD_LEFT,
 
 // default commands
 const COMMANDS:[(&str, Command); 46] =
-    [(&"Right",       Command::Right),
-     (&"Left",        Command::Left),
-	 (&"Right-Ctrl",  Command::Clockwise),
-     (&"Left-Ctrl",   Command::CounterClockwise),
-     (&"Down",        Command::Down),
-     (&"q",           Command::CounterClockwise),
-     (&"q-Shift",     Command::Left),
-     (&"e",           Command::Clockwise),
-     (&"space",       Command::Drop),
-     (&"s",           Command::Resume),
-     (&"t",           Command::TogglePause),
-     (&"p",           Command::Pause),
-     (&"Mouse1",      Command::Left),
-     (&"Mouse2",      Command::Down),
-     (&"Mouse3",      Command::Right),
-     (&"1",           Command::SetBoard(0)),
-     (&"2",           Command::SetBoard(1)),
-     (&"3",           Command::SetBoard(2)),
-     (&"4",           Command::SetBoard(3)),
-     (&"5",           Command::SetBoard(4)),
-     (&"0-Ctrl",      Command::Cheat(0)),   // force piece
-     (&"1-Ctrl",      Command::Cheat(1)),   // force piece
-     (&"2-Ctrl",      Command::Cheat(2)),
-     (&"3-Ctrl",      Command::Cheat(3)),
-     (&"4-Ctrl",      Command::Cheat(4)),
-     (&"5-Ctrl",      Command::Cheat(5)),
-     (&"6-Ctrl",      Command::Cheat(6)),
-     (&"7-Ctrl",      Command::Cheat(7)),
-     (&"8-Ctrl",      Command::Cheat(8)),
-     (&"9-Ctrl",      Command::Cheat(9)),
-     (&"b-Ctrl",      Command::Cheat(10)),  // use fake bitmap: insert bitmap at BITARRAY and recompile
-     (&"d-Shift",     Command::Cheat(11)),  // dump bitmap binary, easy to see current state
-     (&"d-Ctrl",      Command::Cheat(12)),  // dump bitmap hex, can paste into BITARRAY for debugging
-     (&"p-Ctrl",      Command::Cheat(13)),  
-     (&"s-Ctrl",      Command::Cheat(14)),  // print board substatus
-     (&"9-Ctrl",      Command::Cheat(15)),  // remove second-to-last row
+    [("Right",       Command::Right),
+     ("Left",        Command::Left),
+	 ("Right-Ctrl",  Command::Clockwise),
+     ("Left-Ctrl",   Command::CounterClockwise),
+     ("Down",        Command::Down),
+     ("q",           Command::CounterClockwise),
+     ("q-Shift",     Command::Left),
+     ("e",           Command::Clockwise),
+     ("space",       Command::Drop),
+     ("s",           Command::Resume),
+     ("t",           Command::TogglePause),
+     ("p",           Command::Pause),
+     ("Mouse1",      Command::Left),
+     ("Mouse2",      Command::Down),
+     ("Mouse3",      Command::Right),
+     ("1",           Command::SetBoard(0)),
+     ("2",           Command::SetBoard(1)),
+     ("3",           Command::SetBoard(2)),
+     ("4",           Command::SetBoard(3)),
+     ("5",           Command::SetBoard(4)),
+     ("0-Ctrl",      Command::Cheat(0)),   // force piece
+     ("1-Ctrl",      Command::Cheat(1)),   // force piece
+     ("2-Ctrl",      Command::Cheat(2)),
+     ("3-Ctrl",      Command::Cheat(3)),
+     ("4-Ctrl",      Command::Cheat(4)),
+     ("5-Ctrl",      Command::Cheat(5)),
+     ("6-Ctrl",      Command::Cheat(6)),
+     ("7-Ctrl",      Command::Cheat(7)),
+     ("8-Ctrl",      Command::Cheat(8)),
+     ("9-Ctrl",      Command::Cheat(9)),
+     ("b-Ctrl",      Command::Cheat(10)),  // use fake bitmap: insert bitmap at BITARRAY and recompile
+     ("d-Shift",     Command::Cheat(11)),  // dump bitmap binary, easy to see current state
+     ("d-Ctrl",      Command::Cheat(12)),  // dump bitmap hex, can paste into BITARRAY for debugging
+     ("p-Ctrl",      Command::Cheat(13)),  
+     ("s-Ctrl",      Command::Cheat(14)),  // print board substatus
+     ("9-Ctrl",      Command::Cheat(15)),  // remove second-to-last row
 	 // cheat codes 0-20 are forwarded to the active board, higher codes are handled on the controller in controller_cheat()
-     (&"0-Alt",       Command::Cheat(20)),
-     (&"1-Alt",       Command::Cheat(21)),
-     (&"2-Alt",       Command::Cheat(22)),
-     (&"3-Alt",       Command::Cheat(23)),
-     (&"4-Alt",       Command::Cheat(24)),
-     (&"5-Alt",       Command::Cheat(25)),
-     (&"6-Alt",       Command::Cheat(26)),
-     (&"7-Alt",       Command::Cheat(27)),
-     (&"8-Alt",       Command::Cheat(28)),
-     (&"9-Alt",       Command::Cheat(29)),
+     ("0-Alt",       Command::Cheat(20)),
+     ("1-Alt",       Command::Cheat(21)),
+     ("2-Alt",       Command::Cheat(22)),
+     ("3-Alt",       Command::Cheat(23)),
+     ("4-Alt",       Command::Cheat(24)),
+     ("5-Alt",       Command::Cheat(25)),
+     ("6-Alt",       Command::Cheat(26)),
+     ("7-Alt",       Command::Cheat(27)),
+     ("8-Alt",       Command::Cheat(28)),
+     ("9-Alt",       Command::Cheat(29)),
 ];
 
 impl Controller {
@@ -288,7 +290,7 @@ impl Controller {
 		self.internal.borrow_mut().state = state;
 	}
 
-    pub fn board_lost(&self, board_id: u32) { self.set_state(State::Finished); }
+    pub fn board_lost(&self, _board_id: u32) { self.set_state(State::Finished); }
 
     pub fn piece_crashed(&self, board_id: u32, points: u32, lines: u32) {
 		let board_id: usize = board_id as usize;
@@ -300,27 +302,27 @@ impl Controller {
         self.total_lines.set_label(&internal.score.1.to_string());
     }
 
-    pub fn mouse_click(&self, _id: u32, button: u32) {
-        let internal = Rc::clone(&self.internal);
-        self.do_command(mouse_input(button));
-    }
+    pub fn mouse_click(&self, _id: u32, button: u32) { self.do_command(mouse_input(button)); }
 
 	fn do_command(&self, command: Command) {
-		match command {
-			// board commands
-			Command::Left => self.send_command(CMD_LEFT), 
-			Command::Right => self.send_command(CMD_RIGHT),
-			Command::Down => self.send_command(CMD_DOWN),
-			Command::Clockwise => self.send_command(CMD_CLOCKWISE),
-			Command::CounterClockwise => self.send_command(CMD_COUNTERCLOCKWISE),
-			// controller commands
-			Command::Drop => self.send_command(CMD_DROP),
-			Command::Pause => (),
-			Command::Resume => (),
-			Command::TogglePause => (),
-			Command::SetBoard(new_id) => {self.internal.borrow_mut().active = self.set_board(new_id)},
-			Command::Nop => (),
-			Command::Cheat(code) => { if code < 20 {self.send_command(CMD_CHEAT | code)} else { self.controller_cheat(code); }},
+		{
+			if !command.allowed(&self.internal.borrow().state) { return; }
+			match command {
+				// board commands
+				Command::Left => self.send_command(CMD_LEFT), 
+				Command::Right => self.send_command(CMD_RIGHT),
+				Command::Down => self.send_command(CMD_DOWN),
+				Command::Clockwise => self.send_command(CMD_CLOCKWISE),
+				Command::CounterClockwise => self.send_command(CMD_COUNTERCLOCKWISE),
+				// controller commands
+				Command::Drop => self.send_command(CMD_DROP),
+				Command::Pause => (),
+				Command::Resume => (),
+				Command::TogglePause => (),
+				Command::SetBoard(new_id) => {self.internal.borrow_mut().active = self.set_board(new_id)},
+				Command::Nop => (),
+				Command::Cheat(code) => { if code < 20 {self.send_command(CMD_CHEAT | code)} else { self.controller_cheat(code); }},
+			}
 		}
 	}
 
@@ -332,6 +334,8 @@ impl Controller {
 		new_id
 	}
 
+	// clippy warns here, but I want to leave it in this form to show future debugging can insert satements here
+	#[allow(clippy::match_single_binding)]
 	fn controller_cheat(&self, code: u32) {
 		match code {
 			_ => (),
@@ -368,7 +372,7 @@ fn mouse_input(button: u32) -> Command {
     command_map_get(&button_string)
 }
 
-fn keyboard_input(key: gdk4::Key, modifiers: ModifierType) -> Command {
+fn keyboard_input(key: gdk4::Key) -> Command {
     let key_string = modifier_bits_string(key.to_lower().name().unwrap().to_string());
     command_map_get(&key_string)
 }

@@ -69,7 +69,7 @@ impl Config {
     }
 
     pub fn save(&self, filename: &str) -> Result<String, String> {
-        ConfigOptions::from_config(&self).save(filename)
+        ConfigOptions::from_config(self).save(filename)
     }
 
     // CLAP coes check for these from the command line, but this checks config file as well.
@@ -142,7 +142,7 @@ impl ConfigOptions {
         // try reading yaml file if nonzero length. In case of error ignore config file and use defaults and command line config
         let mut config_file = expand_filename(&config.config_file);
         
-        if config_file.len() > 0 {
+        if !config_file.is_empty() {
             // read file as String
             let read_result = std::fs::read_to_string(&mut config_file);
             let read_string = match read_result {

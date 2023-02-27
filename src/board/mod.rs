@@ -27,7 +27,7 @@ impl Board {
         if preview {
             for x in 0..4 {
                 for y in 0..2 {
-                    this.preview.attach(&Board::make_cell(), x as i32, y as i32, 1, 1);
+                    this.preview.attach(&Board::make_cell(), x, y, 1, 1);
                 }
             }
         }

@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use once_cell::sync::OnceCell;
 
-use gtk::{Widget, Root, glib};
+use gtk::{Root, glib};
 use gtk::CompositeTemplate;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -45,7 +45,6 @@ struct Internal {
     piece_counts: [u32; 7],
     bitmap:       Vec<u32>,       // bitmap of board
     state:        u32,            // holds SS_ state bis
-	step_ms:      u32,
 	timer:        Timer,
 }
 
@@ -56,6 +55,8 @@ const SS_DROPPING:  u32 = 0x4;
 const STARTING_TICK_MS: u32 = 500;
 const DROP_RATIO: f64 = 0.1;
 const SPEEDUP_RATIO: f64 = 0.9;
+const LINES_BETWEEN_SPEEDUPS: u32 = 10;
+
 // const SS_STARTED:   u32 = 0x4;
 
 // This is just a dummy for initialization purposes
@@ -67,7 +68,6 @@ impl Default for Internal {
                                           score: (0, 0),
 										  piece_counts: [0; 7],
 										  bitmap: Vec::<u32>::new(),
-										  step_ms: STARTING_TICK_MS,
 										  timer: Timer::new(0, 0, 0),
 	}}
 }
@@ -157,13 +157,13 @@ pub const CMD_CHEAT: u32            = 0x80000000;
 pub const CMD_CHEAT_END: u32        = 0x80000100;
 
 static PIECES: [Piece; 7] = [
-    Piece {name: &"Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], },
-    Piece {name: &"Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], },
-    Piece {name: &"Square",     points: [ 4, 4,  4, 4, ], masks: [0x0660, 0x0660, 0x0660, 0x0660, ], },
-    Piece {name: &"Zee",        points: [ 5, 3,  5, 3, ], masks: [0x0360, 0x0462, 0x0360, 0x0462, ], },
-    Piece {name: &"ReverseZee", points: [ 5, 3,  5, 3, ], masks: [0x0630, 0x0264, 0x0630, 0x0264, ], },
-    Piece {name: &"El",         points: [ 6, 6,  3, 3, ], masks: [0x0470, 0x0322, 0x0071, 0x0226, ], },
-    Piece {name: &"ReverseEl",  points: [ 3, 3,  6, 6, ], masks: [0x0740, 0x2230, 0x0170, 0x0622, ], },
+    Piece {name: "Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], },
+    Piece {name: "Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], },
+    Piece {name: "Square",     points: [ 4, 4,  4, 4, ], masks: [0x0660, 0x0660, 0x0660, 0x0660, ], },
+    Piece {name: "Zee",        points: [ 5, 3,  5, 3, ], masks: [0x0360, 0x0462, 0x0360, 0x0462, ], },
+    Piece {name: "ReverseZee", points: [ 5, 3,  5, 3, ], masks: [0x0630, 0x0264, 0x0630, 0x0264, ], },
+    Piece {name: "El",         points: [ 6, 6,  3, 3, ], masks: [0x0470, 0x0322, 0x0071, 0x0226, ], },
+    Piece {name: "ReverseEl",  points: [ 3, 3,  6, 6, ], masks: [0x0740, 0x2230, 0x0170, 0x0622, ], },
 ];
 
 #[derive(Debug)]
@@ -276,6 +276,7 @@ impl Board {
         }
         let show_preview = self.show_preview();
         let old_pos = 0;
+		let delay = self.delay(false);
         {
             let mut internal = self.internal.borrow_mut();
             // prepare for next piece: reinitialize state for the new piece
@@ -286,7 +287,7 @@ impl Board {
             internal.state |= SS_NEW_PIECE;
             internal.state &= !SS_DROPPING;
 			internal.timer.stop();
-			internal.timer = Timer::new(self.id(), internal.step_ms, self.height());
+			internal.timer = Timer::new(self.id(), delay, self.height());
 			if !initial {internal.timer.start();}
         }
         {
@@ -321,14 +322,15 @@ impl Board {
     }
 
     fn start(&self) -> bool{
+		let delay = { self.delay(false) };
 		let mut internal = self.internal.borrow_mut();
-		internal.timer = Timer::new(self.id(), internal.step_ms, self.height());
+		internal.timer = Timer::new(self.id(), delay, self.height());
 		internal.timer.start();
 		true
 	}
 
     fn translate_piece(&self, dx: i32, dy: i32) -> bool {
-        let mut orientation = Orientation::North;
+        let orientation;
         {
             let internal = self.internal.borrow();
             let (x, y) = (internal.xy.0 + dx, internal.xy.1 + dy);
@@ -343,7 +345,7 @@ impl Board {
     }
         
     fn rotate_piece(&self, rotate: u32) -> bool{
-        let mut orientation = Orientation::North;
+        let orientation;
         {
             let internal = self.internal.borrow();
             orientation = internal.orientation.rotate(rotate);
@@ -353,14 +355,20 @@ impl Board {
         self.draw_moved_piece(0, 0, orientation);
         true
     }
-    
+
+    fn delay(&self, dropping: bool) -> u32 {
+		let lines = self.internal.borrow().score.1;
+		let msecs: u32 = (STARTING_TICK_MS as i32 as f64 * f64::powf(SPEEDUP_RATIO, (lines / LINES_BETWEEN_SPEEDUPS).into())) as u32;
+		if dropping { (msecs as i32 as f64 * DROP_RATIO) as u32} else { msecs }
+	}
+	
 	fn drop_piece(&self) -> bool {
 		let new_timer: Timer;
 		{
 			let internal = self.internal.borrow();
 			if internal.state & SS_DROPPING != 0 { return false; }
 			let old_timer = &internal.timer;
-			let msecs = (internal.step_ms as f64 * DROP_RATIO) as u32;
+			let msecs = self.delay(true);
 			new_timer = Timer::new(self.id(), msecs, old_timer.quit_count.get() as u32);
 			old_timer.stop();
 		}
@@ -373,7 +381,7 @@ impl Board {
 
 	fn lose(&self) -> bool {
 		self.controller().emit_by_name::<()>("board-lost", &[&self.id(), ]);
-		return false;
+		false
 	}
 		
     fn do_cheat(&self, code: u32) -> bool {
@@ -404,7 +412,8 @@ impl Board {
         internal.score.1 += lines;
         self.points.set_label(&internal.score.0.to_string());
         self.lines.set_label(&internal.score.1.to_string());
-        self.controller().emit_by_name::<()>("board-report", &[&self.id(), &delta_score, &lines])
+        self.controller().emit_by_name::<()>("board-report", &[&self.id(), &delta_score, &lines]);
+		
     }
     
     // see note above about different coordinate systems. Here is where they crash together.
@@ -415,7 +424,7 @@ impl Board {
         let bitmap = &self.internal.borrow().bitmap;
         let mut row: usize = (xy.1 + 2) as usize;
         while mask != 0 {
-            let row_bits: u16 = ((bitmap[row] >> xy.0 + 2) & 0xf) as u16;
+            let row_bits: u16 = ((bitmap[row] >> (xy.0 + 2)) & 0xf) as u16;
             if row_bits & mask != 0 { return false; }
             mask >>= 4;
             row += 1;
@@ -429,7 +438,7 @@ impl Board {
 		{
 			let bitmap: &Vec<u32> = &self.internal.borrow().bitmap;
 			// originally I used -1 here, as it is simpler. By making this mask I can use the leading bits to mark buffer rows for debugging
-			let mask: u32 = (0x1 << self.width() + 4) - 1;
+			let mask: u32 = (0x1 << (self.width() + 4)) - 1;
 			for i in 2..(bitmap.len() as i32) - 2 {
 //              if bitmap[i as usize] == 0xffffffff {
 				if bitmap[i as usize] & mask == mask {
@@ -442,7 +451,8 @@ impl Board {
 
 		// finally update the bitmap. This must be done bottom-to-top to maintain the offsets, and then add the new empty rows on top
 		let bitmap = &mut self.internal.borrow_mut().bitmap;
-		let new_row_mask:u32 = 0xffffffff & !(((1 << self.width()) - 1) << 2);  // mask is -1 with the bits representing the playing area cleared
+		//let new_row_mask:u32 = 0xffffffff;
+		let new_row_mask:u32 = !(((1 << self.width()) - 1) << 2);  // mask is -1 with the bits representing the playing area cleared
 		for board_row in &to_remove {
 			// working from top down, delete a row and replace it with a blank one on top
 			// +2: move to bitmap coords
@@ -481,7 +491,7 @@ impl Board {
     // Moves a piece to a new position. The new position should have already been checked, this
     // assumes the move can be made
     fn draw_moved_piece(&self, dx:i32, dy: i32, o1: Orientation) {
-        let (mut x1, mut y1): (i32, i32) = (0, 0);
+        let (x1, y1): (i32, i32);
         {
             let internal = self.internal.borrow();
             let piece = internal.piece.0;
@@ -544,7 +554,7 @@ impl Board {
     // to handle any redrawing, and setting the colors is simple. If drawing turns out to be better then board.playing_area
     // needs to be replaced with a drawing area and these functions need to be redone
     fn cell_at(&self, xy: (i32, i32)) -> Option<gtk::Widget> {
-        self.playing_area.child_at((self.width() as i32) - 1 - xy.0 as i32, xy.1)
+        self.playing_area.child_at((self.width() as i32) - 1 - xy.0, xy.1)
     }
 
     fn get_cell_color(&self, x: i32, y: i32) -> String {
@@ -552,16 +562,13 @@ impl Board {
         match cell_opt {
             None => "empty".to_string(),
             Some(widget) => { let class_names = widget.css_classes();
-                              if class_names.len() > 0 {class_names[0].to_string()} else {"empty".to_string()}
+                              if !class_names.is_empty() {class_names[0].to_string()} else {"empty".to_string()}
             }
         }
     }
     
     fn set_cell_color(&self, xy: (i32, i32), piece_name: &str) {
-        match self.cell_at(xy) {
-            Some(cell) => cell.set_css_classes(&[piece_name]),
-            None => (),    // if the cell is off the visible board just don't draw it
-        };
+		if let Some(cell) = self.cell_at(xy) { cell.set_css_classes(&[piece_name]); }
     }
 
 
@@ -576,7 +583,7 @@ impl Board {
             let mut bit = 0x1u32 << 2;     // skip the first 2 edge bits
             for x in 0..self.width() {
                 if bit & internal.bitmap[y as usize] != 0 {
-                    self.set_cell_color((x as i32, (y - 2) as i32), &PIECES[(y as usize)%PIECES.len()].name);   // rows will be the same color
+                    self.set_cell_color((x as i32, (y - 2) as i32), PIECES[(y as usize)%PIECES.len()].name);   // rows will be the same color
                 }
                 bit <<= 1;
             }
