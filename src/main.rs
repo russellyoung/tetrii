@@ -14,6 +14,7 @@ use std::env;
 use gtk::{CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION};
 use gtk::gdk::Display;
 use gtk::prelude::*;
+use gtk::subclass::prelude::ObjectSubclassIsExt;
 
 use once_cell::sync::Lazy;
 
@@ -29,9 +30,12 @@ fn main() {
     app.connect_activate(move |appx| {
         load_css("style.css");     // needs app to be active before this can be done
         //let win = Board::new(app, 10, 20, 0);
-        let  win = Options::new(appx);
-        win.show();
-        win.set_defaults(config.boards, width, height, preview);
+        let  options = Options::new(appx);
+		
+//        win.show();
+        options.set_values(config.boards, width, height, preview);
+		options.make_controller();
+		unsafe {OPTIONS = Some(options); }
     });
     let empty: Vec<String> = vec![];  // thanks to stackoverflow, I learned EMPTY is needed to keep GTK from interpreting the command line flags
     app.run_with_args(&empty);
@@ -60,6 +64,11 @@ fn load_css(filename: &str) {
     );
 }
 
+fn exit() {
+	controller_inst().destroy();
+	options_inst().destroy();
+}
+
 //////////////////////////////////////////////////////////////////
 //
 // STATIC MUTS
@@ -73,5 +82,7 @@ fn load_css(filename: &str) {
 //////////////////////////////////////////////////////////////////
 static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(Vec::new);
 static mut CONTROLLER: Option<crate::controller::Controller> = None;
-
+static mut OPTIONS: Option<crate::options::Options> = None;
 fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
+fn controller_inst<'a>() -> &'a crate::controller::imp::Controller { unsafe { CONTROLLER.as_ref().unwrap().imp() }}
+fn options_inst<'a>() -> &'a crate::options::imp::Options { unsafe { OPTIONS.as_ref().unwrap().imp() }}

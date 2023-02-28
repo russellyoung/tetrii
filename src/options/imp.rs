@@ -1,23 +1,39 @@
 use crate::controller::Controller;
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gtk::{glib, CompositeTemplate};
 use gtk::glib::clone;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 
+#[derive(Debug, )]
+struct Internal {
+	count: u32,
+	height: u32,
+	width: u32,
+	preview: bool,
+}
+impl Default for Internal {
+    fn default() -> Internal { Internal { count: 2, height: 20, width: 10, preview: true, }}
+}
+
 //#[derive(Debug, Default)]
 #[derive(Debug, Default, CompositeTemplate)]
 #[template(file = "options.ui")]
 pub struct Options {
+	internal: Rc<RefCell<Internal>>,
+	
     #[template_child]
-    pub boardcount: TemplateChild<gtk::DropDown>,
+    pub board_count: TemplateChild<gtk::DropDown>,
     #[template_child]
-    pub width: TemplateChild<gtk::DropDown>,
+    pub width_widget: TemplateChild<gtk::DropDown>,
     #[template_child]
-    pub height: TemplateChild<gtk::DropDown>,
+    pub height_widget: TemplateChild<gtk::DropDown>,
     #[template_child]
-    pub start_button: TemplateChild<gtk::Button>,
+    pub apply_button: TemplateChild<gtk::Button>,
     #[template_child]
-    pub quit_button: TemplateChild<gtk::Button>,
+    pub cancel_button: TemplateChild<gtk::Button>,
     #[template_child]
     pub preview_check: TemplateChild<gtk::CheckButton>,
     //    pub grid: gtk::Grid,
@@ -53,37 +69,67 @@ impl ObjectImpl for Options {
     // and where we can initialize things.
     fn constructed(&self) {
         self.parent_constructed();
-        let goptions = self.obj();
         let options = self;
-        //self.start_button.connect_clicked(clone!(@weak window => move |_| { println!("{:#?}", window); }));
-        self.quit_button.connect_clicked(clone!(@weak goptions => move |_| goptions.destroy()));
-        self.start_button.connect_clicked(clone!(@weak options => move |_| options.make_controller()));
+        self.cancel_button.connect_clicked(clone!(@weak options => move |_| {
+			options.set_display_from_values();
+			options.obj().hide();
+		}));
+        self.apply_button.connect_clicked(clone!(@weak options => move |_| {
+			options.set_values_from_display();
+			options.remake_controller();
+			options.obj().hide();
+		}));
         // I'm sure this can be done in the template file, but I couldn't find how, either in the doc or testing. I tried
         // setting the "selected" and "selected-item" properties but they did not work
-        self.width.set_property("selected", 2u32);
-        self.height.set_property("selected", 10u32);
+        self.width_widget.set_property("selected", 2u32);
+        self.height_widget.set_property("selected", 10u32);
         //        self.obj().set_child(Some(&self.grid));
     }
 
 }
 
 impl Options {
-    pub fn set_values(&self, count: u32, width: u16, height: u16, preview: bool) {
-        self.boardcount.set_property("selected", count - 1);
-        self.width.set_property("selected", (width - 8) as u32);
-        self.height.set_property("selected", (height - 10) as u32);
-        self.preview_check.set_active(preview);
+	pub fn destroy(&self) { self.obj().destroy(); }
+
+	// inject values into options, store in struct and display in ui
+    pub fn set_values(&self, count: u32, width: u32, height: u32, preview: bool) {
+		{
+			let mut internal = self.internal.borrow_mut();
+			(internal.count, internal.width, internal.height, internal.preview) = (count, width, height, preview);
+		}
+		self.set_display_from_values();
+	}
+
+	// set display values from struct
+	fn set_display_from_values(&self) {
+		let internal = self.internal.borrow();
+        self.board_count.set_property("selected", internal.count - 1);
+        self.width_widget.set_property("selected", internal.width - 8);
+        self.height_widget.set_property("selected", internal.height - 10);
+        self.preview_check.set_active(internal.preview);
     }
+
+	// update struct values from display
+	fn set_values_from_display(&self) {
+		let mut internal = self.internal.borrow_mut();
+		(internal.count, internal.width, internal.height, internal.preview) =
+			(self.board_count.selected() + 1,
+             self.width_widget.selected() + 8,
+             self.height_widget.selected() + 10,
+             self.preview_check.is_active());
+	}
         
-    fn make_controller(&self, ) {
-        Controller::new_ref(
-            &self.obj().application().unwrap(),
-            self.boardcount.selected() + 1,
-            self.width.selected() + 8,
-            self.height.selected() + 10,
-            self.preview_check.is_active())
+    pub fn make_controller(&self, ) {
+		let internal = self.internal.borrow();
+        Controller::new_ref(&self.obj().application().unwrap(),internal.count, internal.width, internal.height, internal.preview)
             .show();
     }
+
+    pub fn remake_controller(&self, ) {
+		let internal = self.internal.borrow();
+		let controller = crate::controller_inst();
+		controller.initialize(internal.count, internal.width, internal.height, internal.preview);
+	}
 }
 
 

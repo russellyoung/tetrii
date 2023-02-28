@@ -1,4 +1,8 @@
+use crate::BOARDS;
 use crate::Board;
+use crate::CONTROLLER;
+use crate::controller_inst;
+
 use std::rc::Rc;
 use std::collections::HashMap;
 
@@ -11,9 +15,6 @@ use gdk4::ModifierType;
 // this gives a warning as unused, but removing it breaks the Default for Internal
 use std::cell::RefCell;
 use once_cell::sync::Lazy;
-
-use crate::BOARDS;
-use crate::CONTROLLER;
 
 // CONTROLLER accessors
 pub(super) fn has_instance() -> bool { unsafe { CONTROLLER.is_some() }}
@@ -64,6 +65,8 @@ pub struct Controller {
     pub start_button: TemplateChild<gtk::Button>,
     #[template_child]
     pub quit_button: TemplateChild<gtk::Button>,
+    #[template_child]
+    pub options_button: TemplateChild<gtk::Button>,
     //    pub grid: gtk::Grid,
 }
 
@@ -72,7 +75,6 @@ struct Internal {
     active: u32,        // the board to direct commands to
     score: (u32, u32),    // (points, completed lines)
     state: State,
-    dropping: u32,        // mask telling if a board is currently dropping a piece
 	modifier_bits: u32,
 }
 
@@ -96,15 +98,14 @@ impl ObjectImpl for Controller {
     fn constructed(&self) {
         self.parent_constructed();
         let gcontroller = self.obj();
-        self.quit_button.connect_clicked(clone!(@weak gcontroller => move |_| {
-			gcontroller.destroy();
-		}));
-        self.start_button.connect_clicked( |_button| { controller().toggle_state(); });
+        self.quit_button.connect_clicked(clone!(@weak gcontroller => move |_| { gcontroller.exit(); }));
+        self.options_button.connect_clicked( |_button| { Controller::options(true); });
+        self.start_button.connect_clicked( |_button| { controller_inst().toggle_state(); });
         let key_handler = gtk::EventControllerKey::new();
         self.obj().add_controller(&key_handler);
         key_handler.connect_key_pressed(move |_ctlr, key, _code, _mods| {
 			set_modifier(key, true);
-            controller().do_command(keyboard_input(key));
+            controller_inst().do_command(keyboard_input(key));
             gtk::Inhibit(true)
         });
         key_handler.connect_key_released(move |_ctlr, key, _code, _mods| {
@@ -185,7 +186,7 @@ use crate::board::imp::{CMD_LEFT,
 };
 
 // default commands
-const COMMANDS:[(&str, Command); 46] =
+const COMMANDS:[(&str, Command); 48] =
     [("Right",       Command::Right),
      ("Left",        Command::Left),
 	 ("Right-Ctrl",  Command::Clockwise),
@@ -199,8 +200,10 @@ const COMMANDS:[(&str, Command); 46] =
      ("t",           Command::TogglePause),
      ("p",           Command::Pause),
      ("Mouse1",      Command::Left),
-     ("Mouse2",      Command::Down),
+     ("Mouse2",      Command::Drop),
      ("Mouse3",      Command::Right),
+     ("Mouse1-Ctrl", Command::CounterClockwise),
+     ("Mouse3-Ctrl", Command::Clockwise),
      ("1",           Command::SetBoard(0)),
      ("2",           Command::SetBoard(1)),
      ("3",           Command::SetBoard(2)),
@@ -237,58 +240,72 @@ const COMMANDS:[(&str, Command); 46] =
 
 impl Controller {
 	fn active_id(&self) -> u32 { self.internal.borrow().active }
+
     pub fn initialize(&self, board_count: u32, width: u32, height: u32, preview: bool) {
 		self.set_state(State::Initial);
         boards_reset();
-		
         let container = &self.boards_container;
+		while let Some(row) = container.last_child() {
+			container.remove(&row);
+		}
         for i in 0..board_count {
             let b = Board::new(i, width, height, preview);
             container.append(&b);
             boards_add(b);
         }
+		{ self.internal.borrow_mut().score = (0, 0); }
+        self.total_points.set_label("0");
+        self.total_lines.set_label("0");
 		self.send_command(CMD_SELECT);
     }
-
+	
+	fn reinit(&self) {
+		let rep = board(0).imp();
+		self.initialize(boards_len() as u32, rep.width(), rep.height(), rep.show_preview());
+	}
+	
 	fn toggle_state(&self) {
 		let state = { self.internal.borrow().state };
 		match state {
 			State::Initial | State::Paused => self.set_state(State::Running),
 			State::Running => self.set_state(State::Paused),
-			State::Finished => ()
+			State::Finished => self.reinit(),
 		}
 	}
 
+	pub fn destroy(&self) { self.obj().destroy(); }
+	
 	fn set_state(&self, state: State) {
 		match state {
 			State::Initial => {
-				self.start_button.set_visible(true);
 				self.start_button.set_label("Start");
+				self.options_button.show();
 			},
 			State::Paused => {
+				self.options_button.hide();
 				self.start_button.set_label("Continue");
 				send_command_all(CMD_STOP);
 			},
 			State::Running => {
+				self.options_button.hide();
 				self.start_button.set_label("Pause");
 				send_command_all(CMD_START);
 			},
 			State::Finished => {
-				self.start_button.set_visible(false);
+				self.options_button.show();
 				send_command_all(CMD_STOP);
+				self.start_button.set_label("New game");
 			}
 		}
 		// in case Button grabbed it
-//		self.obj().grab_focus();
+		self.obj().grab_focus();
 		self.internal.borrow_mut().state = state;
 	}
 
     pub fn board_lost(&self, _board_id: u32) { self.set_state(State::Finished); }
 
-    pub fn piece_crashed(&self, board_id: u32, points: u32, lines: u32) {
-		let board_id: usize = board_id as usize;
+    pub fn piece_crashed(&self, points: u32, lines: u32) {
         let mut internal = self.internal.borrow_mut();
-        internal.dropping &= !0x1 << board_id;
         let old_score = internal.score;
         internal.score = (old_score.0 + points, old_score.1 + lines);
         self.total_points.set_label(&internal.score.0.to_string());
@@ -342,6 +359,11 @@ impl Controller {
 			board(id).emit_by_name::<()>("board-command", &[&id_u32, &mask, ]);
 		}
 	}
+
+	fn options(show: bool) {
+		if show { crate::options_inst().show(); }
+			else { crate::options_inst().hide(); }
+	}
 }
 
 fn send_command_all(mask: u32) { for id in 0..boards_len() as u32 {send_command_to(id, mask); } }
@@ -371,7 +393,7 @@ fn keyboard_input(key: gdk4::Key) -> Command {
 }
 
 fn modifier_bits_string(mut key: String) -> String {
-	let bits = controller().internal.borrow().modifier_bits;
+	let bits = controller_inst().internal.borrow().modifier_bits;
 	if bits & ModifierType::SHIFT_MASK.bits() != 0 { key.push_str("-Shift"); }
 	if bits & ModifierType::ALT_MASK.bits() != 0 { key.push_str("-Alt"); }
 	if bits & ModifierType::CONTROL_MASK.bits() != 0 { key.push_str("-Ctrl"); }
@@ -388,7 +410,7 @@ fn set_modifier(key: gdk4::Key, pressed: bool) {
 		"Meta_L"    | "Meta_R"    => ModifierType::META_MASK.bits(),
 		_ => return,
 	};
-	let mut internal = controller().internal.borrow_mut();
+	let mut internal = controller_inst().internal.borrow_mut();
 	if pressed { internal.modifier_bits  |= mask; }
 	else { internal.modifier_bits &= !mask; }
 }

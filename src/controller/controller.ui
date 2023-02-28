@@ -96,6 +96,22 @@
 			  </object>
 			</child>
 			<child>
+			  <object class="GtkButton" id="options_button" >
+				<style>
+				  <class name="options-button"/>
+				</style>
+				<property name="label">Options</property>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkLabel">
+				<property name="label">         </property>
+				<style>
+				  <class name="quit-button"/>
+				</style>
+			  </object>
+			</child>
+			<child>
 			  <object class="GtkButton" id="quit_button" >
 				<style>
 				  <class name="quit-button"/>

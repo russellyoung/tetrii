@@ -1,12 +1,12 @@
 //use self::glib::{BindingFlags, ParamSpec, ParamSpecInt, Value};
 use crate::board;
+use crate::controller_inst;
 use fastrand;
-use std::cell::RefCell;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use once_cell::sync::OnceCell;
 
-use gtk::{Root, glib};
+use gtk::glib;
 use gtk::CompositeTemplate;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -106,7 +106,7 @@ impl ObjectImpl for Board {
         let gesture_left = gtk::GestureClick::new();
         gesture_left.connect_pressed(clone!(@weak this => move |gesture, _x, _y, _z| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
-            this.controller().emit_by_name::<()>("mouse-click", &[&this.id(), &0u32]);
+            controller_inst().obj().emit_by_name::<()>("mouse-click", &[&this.id(), &0u32]);
         }));
         gesture_left.set_button(gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32);
         self.obj().add_controller(&gesture_left);
@@ -114,7 +114,7 @@ impl ObjectImpl for Board {
         let gesture_middle = gtk::GestureClick::new();
         gesture_middle.connect_pressed(clone!(@weak this => move |gesture, _x, _y, _z| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
-            this.controller().emit_by_name::<()>("mouse-click", &[&this.id(), &1u32]);
+            controller_inst().obj().emit_by_name::<()>("mouse-click", &[&this.id(), &1u32]);
         }));
         gesture_middle.set_button(gtk::gdk::ffi::GDK_BUTTON_MIDDLE as u32);
         self.obj().add_controller(&gesture_middle);
@@ -122,13 +122,13 @@ impl ObjectImpl for Board {
         let gesture_right = gtk::GestureClick::new();
         gesture_right.connect_pressed(clone!(@weak this => move |gesture, _x, _y, _z| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
-            this.controller().emit_by_name::<()>("mouse-click", &[&this.id(), &2u32]);
+            controller_inst().obj().emit_by_name::<()>("mouse-click", &[&this.id(), &2u32]);
         }));
         gesture_right.set_button(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32);
         self.obj().add_controller(&gesture_right);
 
 		let enter_handler = EventControllerMotion::new();
-		enter_handler.connect_enter(clone!(@weak this => move |_w, _x, _y, | this.controller().emit_by_name::<()>("select", &[&this.id()])));
+		enter_handler.connect_enter(clone!(@weak this => move |_w, _x, _y, | controller_inst().obj().emit_by_name::<()>("select", &[&this.id()])));
         self.obj().add_controller(&enter_handler);
 		
     }
@@ -244,15 +244,10 @@ impl Piece {
 
 
 impl Board {
-    fn height(&self) -> u32 { *self.height_oc.get().unwrap() }
-    fn width(&self) -> u32 { *self.width_oc.get().unwrap() }
+    pub fn height(&self) -> u32 { *self.height_oc.get().unwrap() }
+    pub fn width(&self) -> u32 { *self.width_oc.get().unwrap() }
     fn id(&self) -> u32 { *self.id_oc.get().unwrap() }
-    fn show_preview(&self) -> bool { *self.show_preview_oc.get().unwrap() }
-    // TODO: get via css ID?
-	// Is this considered good practice?
-//    fn controller(&self) -> Widget { self.obj().parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap() }
-    fn controller(&self) -> Root { self.obj().root().unwrap() }
-    
+    pub fn show_preview(&self) -> bool { *self.show_preview_oc.get().unwrap() }
     
     // Most initializes correctly by default, BITMAP relies on height and width
     pub fn prepare(&self) {
@@ -383,7 +378,7 @@ impl Board {
 	}
 
 	fn lose(&self) -> bool {
-		self.controller().emit_by_name::<()>("board-lost", &[&self.id(), ]);
+		controller_inst().obj().emit_by_name::<()>("board-lost", &[&self.id(), ]);
 		false
 	}
 		
@@ -415,7 +410,7 @@ impl Board {
         internal.score.1 += lines;
         self.points.set_label(&internal.score.0.to_string());
         self.lines.set_label(&internal.score.1.to_string());
-        self.controller().emit_by_name::<()>("board-report", &[&self.id(), &delta_score, &lines]);
+        controller_inst().obj().emit_by_name::<()>("board-report", &[&self.id(), &delta_score, &lines]);
 		
     }
     

@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};            // config file parsing
 
 // default values, overridden by config file and command line switches
 const BOARDS_DEFAULT:   u32 = 2;
-const WIDTH_DEFAULT:    u16 = 10;
-const HEIGHT_DEFAULT:   u16 = 20;
+const WIDTH_DEFAULT:    u32 = 10;
+const HEIGHT_DEFAULT:   u32 = 20;
 const CELLSIZE_DEFAULT: u16 = 20;
 const DELAY_DEFAULT:    f64 = 0.05;
 //const EXTENDED_DEFAULT: f64 = 0.03;
@@ -35,10 +35,10 @@ const PREVIEW_DEFAULT:  bool = true;
 pub struct Config {
     #[clap(short, long, default_value_t = BOARDS_DEFAULT, value_parser=value_parser!(u32).range(0..5))]
     pub boards: u32,
-    #[clap(short='W', long, default_value_t = WIDTH_DEFAULT, value_parser=value_parser!(u16).range(5..25))]
-    pub width: u16,
-    #[clap(short='H', long, default_value_t = HEIGHT_DEFAULT, value_parser=value_parser!(u16).range(10..40))]
-    pub height: u16,
+    #[clap(short='W', long, default_value_t = WIDTH_DEFAULT, value_parser=value_parser!(u32).range(5..25))]
+    pub width: u32,
+    #[clap(short='H', long, default_value_t = HEIGHT_DEFAULT, value_parser=value_parser!(u32).range(10..40))]
+    pub height: u32,
     #[clap(short='C', long, default_value_t = CELLSIZE_DEFAULT, value_parser=value_parser!(u16).range(10..50))]
     pub cell_size: u16,
     #[clap(short, long, default_value_t = DELAY_DEFAULT)]
@@ -75,7 +75,7 @@ impl Config {
     // CLAP coes check for these from the command line, but this checks config file as well.
     fn check_values(&self) {
         assert!(1 <= self.boards && self.boards <= 5, "Number of boards must be between 1 and 5");
-        assert!(8 <= self.width && self.height <= 28, "Board width must be between 8 and 28");
+        assert!(8 <= self.width && self.width <= 28, "Board width must be between 8 and 28");
         assert!(10 <= self.height && self.height <= 40, "Board height must be between 10 and 40");
     }
 }
@@ -93,8 +93,8 @@ impl Config {
 #[derive(Debug, Deserialize, Serialize)]
 struct ConfigOptions {
     Boards:         Option<u32>,
-    Width:          Option<u16>,
-    Height:         Option<u16>,
+    Width:          Option<u32>,
+    Height:         Option<u32>,
     CellSize:       Option<u16>,
     Delay:          Option<f64>,
 //    ExtendedChance: Option<f64>,
