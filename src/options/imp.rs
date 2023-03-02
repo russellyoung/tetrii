@@ -1,21 +1,27 @@
 use crate::controller::Controller;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::fs;
+use std::env;
+
 
 use gtk::{glib, CompositeTemplate};
 use gtk::glib::clone;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
+use gtk::{CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION};
+use gtk::gdk::Display;
 
 #[derive(Debug, )]
 struct Internal {
 	count: u32,
 	height: u32,
 	width: u32,
+    cell_size: u32, 
 	preview: bool,
 }
 impl Default for Internal {
-    fn default() -> Internal { Internal { count: 2, height: 20, width: 10, preview: true, }}
+    fn default() -> Internal { Internal { count: 2, height: 20, width: 10, cell_size: 25, preview: true, }}
 }
 
 //#[derive(Debug, Default)]
@@ -30,6 +36,8 @@ pub struct Options {
     pub width_widget: TemplateChild<gtk::DropDown>,
     #[template_child]
     pub height_widget: TemplateChild<gtk::DropDown>,
+    #[template_child]
+    pub cell_widget: TemplateChild<gtk::DropDown>,
     #[template_child]
     pub apply_button: TemplateChild<gtk::Button>,
     #[template_child]
@@ -88,14 +96,19 @@ impl ObjectImpl for Options {
 
 }
 
+impl WidgetImpl for Options {}
+impl WindowImpl for Options {}
+impl ApplicationWindowImpl for Options {}
+
 impl Options {
 	pub fn destroy(&self) { self.obj().destroy(); }
 
 	// inject values into options, store in struct and display in ui
-    pub fn set_values(&self, count: u32, width: u32, height: u32, preview: bool) {
+    pub fn set_values(&self, count: u32, width: u32, height: u32, cell_size: u32, preview: bool) {
 		{
 			let mut internal = self.internal.borrow_mut();
-			(internal.count, internal.width, internal.height, internal.preview) = (count, width, height, preview);
+            if internal.cell_size != cell_size { set_cellsize(cell_size); }
+			(internal.count, internal.width, internal.height, internal.cell_size, internal.preview) = (count, width, height, cell_size, preview);
 		}
 		self.set_display_from_values();
 	}
@@ -106,17 +119,24 @@ impl Options {
         self.board_count.set_property("selected", internal.count - 1);
         self.width_widget.set_property("selected", internal.width - 8);
         self.height_widget.set_property("selected", internal.height - 10);
+        self.cell_widget.set_property("selected", (internal.cell_size - 10)/5);
         self.preview_check.set_active(internal.preview);
     }
 
 	// update struct values from display
 	fn set_values_from_display(&self) {
 		let mut internal = self.internal.borrow_mut();
-		(internal.count, internal.width, internal.height, internal.preview) =
-			(self.board_count.selected() + 1,
-             self.width_widget.selected() + 8,
-             self.height_widget.selected() + 10,
-             self.preview_check.is_active());
+        let cell_pixels = self.cell_widget.selected()*5 + 10;
+        if internal.cell_size != cell_pixels {
+            set_cellsize(cell_pixels);
+        }
+		(internal.count, internal.width, internal.height, internal.cell_size, internal.preview) = (
+            self.board_count.selected() + 1,
+            self.width_widget.selected() + 8,
+            self.height_widget.selected() + 10,
+            cell_pixels,
+            self.preview_check.is_active(),
+        );
 	}
         
     pub fn make_controller(&self, ) {
@@ -132,7 +152,33 @@ impl Options {
 	}
 }
 
+fn set_cellsize(size: u32) {
+    let str = format!(".cell {{ min-height: {}px; min-width: {}px;}}", size, size);
+    read_style(str.as_bytes());
+}
 
-impl WidgetImpl for Options {}
-impl WindowImpl for Options {}
-impl ApplicationWindowImpl for Options {}
+pub fn read_style(css_data: &[u8]) {
+    let provider = CssProvider::new();
+    provider.load_from_data(css_data);
+    StyleContext::add_provider_for_display(
+        &Display::default().expect("Could not connect to a display."),
+        &provider,
+        STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
+pub fn load_style_from_file(filename: &str) {
+    let mut path = env::current_dir().unwrap();
+	path.push(filename);
+    let mut css_data = fs::read(&path);//.expect("could not find CSS file");
+	while css_data.is_err() {
+		path.pop();
+		if !path.pop() {
+			panic!("Cannot find file {} anywhere on the current trunk, file is required for program to run", filename);
+		}
+		path.push(filename);
+		css_data = fs::read(&path);//.expect("could not find CSS file");
+	}
+    read_style(&css_data.unwrap());
+}
+

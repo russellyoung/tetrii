@@ -11,7 +11,9 @@ glib::wrapper! {
 impl Options {
     pub fn new<P: glib::IsA<gtk::Application>>(app: &P) -> Self { glib::Object::builder().property("application", app).build() }
 
-    pub fn set_values(&self, count: u32, width: u32, height: u32, preview: bool) { self.imp().set_values(count, width, height, preview); }
+    pub fn set_values(&self, count: u32, width: u32, height: u32, cell_size: u32, preview: bool) {
+        self.imp().set_values(count, width, height, cell_size, preview);
+    }
 
     pub fn make_controller(&self, ) { self.imp().make_controller(); }
 }

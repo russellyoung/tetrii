@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};            // config file parsing
 const BOARDS_DEFAULT:   u32 = 2;
 const WIDTH_DEFAULT:    u32 = 10;
 const HEIGHT_DEFAULT:   u32 = 20;
-const CELLSIZE_DEFAULT: u16 = 20;
+const CELLSIZE_DEFAULT: u32 = 20;
 const DELAY_DEFAULT:    f64 = 0.05;
 //const EXTENDED_DEFAULT: f64 = 0.03;
 const PREVIEW_DEFAULT:  bool = true;
@@ -39,8 +39,8 @@ pub struct Config {
     pub width: u32,
     #[clap(short='H', long, default_value_t = HEIGHT_DEFAULT, value_parser=value_parser!(u32).range(10..40))]
     pub height: u32,
-    #[clap(short='C', long, default_value_t = CELLSIZE_DEFAULT, value_parser=value_parser!(u16).range(10..50))]
-    pub cell_size: u16,
+    #[clap(short='C', long, default_value_t = CELLSIZE_DEFAULT, value_parser=value_parser!(u32).range(10..50))]
+    pub cell_size: u32,
     #[clap(short, long, default_value_t = DELAY_DEFAULT)]
     pub delay: f64,
 //    #[clap(short, long, default_value_t = EXTENDED_DEFAULT)]
@@ -95,7 +95,7 @@ struct ConfigOptions {
     Boards:         Option<u32>,
     Width:          Option<u32>,
     Height:         Option<u32>,
-    CellSize:       Option<u16>,
+    CellSize:       Option<u32>,
     Delay:          Option<f64>,
 //    ExtendedChance: Option<f64>,
     Preview:        Option<bool>,

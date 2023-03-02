@@ -9,10 +9,6 @@ use config::Config;
 use options::Options;
 use board::Board;
 
-use std::fs;
-use std::env;
-use gtk::{CssProvider, StyleContext, STYLE_PROVIDER_PRIORITY_APPLICATION};
-use gtk::gdk::Display;
 use gtk::prelude::*;
 use gtk::subclass::prelude::ObjectSubclassIsExt;
 
@@ -27,43 +23,18 @@ fn main() {
     let height = config.height;
     let width = config.width;
     let preview = config.preview;
+    let cell_size = config.cell_size;
     app.connect_activate(move |appx| {
-        load_css("style.css");     // needs app to be active before this can be done
         //let win = Board::new(app, 10, 20, 0);
         let  options = Options::new(appx);
-		
-//        win.show();
-        options.set_values(config.boards, width, height, preview);
+		options::imp::load_style_from_file("style.css");
+        options.set_values(config.boards, width, height, cell_size, preview);
 		options.make_controller();
 		unsafe {OPTIONS = Some(options); }
     });
     let empty: Vec<String> = vec![];  // thanks to stackoverflow, I learned EMPTY is needed to keep GTK from interpreting the command line flags
     app.run_with_args(&empty);
 }
-
-// read the css file. If it is not in the current directory go pu the tree to look for it. This way
-// the program will run from any of the crate subdirectories.
-fn load_css(filename: &str) {
-    let mut path = env::current_dir().unwrap();
-	path.push(filename);
-    let mut css_data = fs::read(&path);//.expect("could not find CSS file");
-	while css_data.is_err() {
-		path.pop();
-		if !path.pop() {
-			panic!("Cannot find file {} anywhere on the current trunk, file is required for program to run", filename);
-		}
-		path.push(filename);
-		css_data = fs::read(&path);//.expect("could not find CSS file");
-	}
-    let provider = CssProvider::new();
-    provider.load_from_data(&css_data.unwrap());
-    StyleContext::add_provider_for_display(
-        &Display::default().expect("Could not connect to a display."),
-        &provider,
-        STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-}
-
 fn exit() {
 	controller_inst().destroy();
 	options_inst().destroy();
@@ -83,9 +54,7 @@ fn exit() {
 static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(Vec::new);
 static mut CONTROLLER: Option<crate::controller::Controller> = None;
 static mut OPTIONS: Option<crate::options::Options> = None;
-static mut SUMMARY: Option<crate::controller::imp::summary::Summary> = None;
 
 fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
 fn controller_inst<'a>() -> &'a crate::controller::imp::Controller { unsafe { CONTROLLER.as_ref().unwrap().imp() }}
 fn options_inst<'a>() -> &'a crate::options::imp::Options { unsafe { OPTIONS.as_ref().unwrap().imp() }}
-fn summary_inst<'a>() -> &'a crate::controller::imp::summary::imp::Summary { unsafe { SUMMARY.as_ref().unwrap().imp() }}

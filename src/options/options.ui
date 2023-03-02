@@ -160,11 +160,36 @@
 			  </object>
 			</child>
 			<child>
+			  <object class="GtkLabel">
+				<property name="label">Cell size</property>
+                <layout>
+                  <property name="column">0</property>
+                  <property name="row">3</property>
+                </layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkDropDown" id="cell_widget">
+                <layout>
+                  <property name="column">1</property>
+                  <property name="row">3</property>
+                </layout>
+				<property name="model">
+				  <object class="GtkStringList">
+					<items>
+					  <item>10</item> <item>15</item> <item>20</item> <item>25</item> <item>30</item>
+					  <item>35</item> <item>40</item> <item>45</item> <item>50</item>
+					</items>
+				  </object>
+				</property>
+			  </object>
+			</child>
+			<child>
 			  <object class="GtkLabel" >
 				<property name="label">Show preview</property>
 				<layout>
                   <property name="column">0</property>
-                  <property name="row">3</property>
+                  <property name="row">4</property>
 				</layout>
 			  </object>
 			</child>
@@ -172,7 +197,7 @@
               <object class="GtkCheckButton" id="preview_check" >
 				<layout>
                   <property name="column">1</property>
-                  <property name="row">3</property>
+                  <property name="row">4</property>
 				</layout>
 			  </object>
 			</child>
@@ -184,7 +209,7 @@
                 <property name="label">Apply</property>
                 <layout>
                   <property name="column">0</property>
-                  <property name="row">4</property>
+                  <property name="row">5</property>
                 </layout>
               </object>
             </child>
@@ -196,7 +221,7 @@
                 <property name="label">Cancel</property>
                 <layout>
                   <property name="column">1</property>
-                  <property name="row">4</property>
+                  <property name="row">5</property>
                 </layout>
               </object>
             </child>
