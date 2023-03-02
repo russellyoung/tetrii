@@ -43,7 +43,6 @@ struct Internal {
     xy:           (i32, i32),
     orientation:  Orientation,
     score:        (u32, u32),      // points, levels
-    piece_counts: [u32; 7],
     bitmap:       Vec<u32>,       // bitmap of board
     state:        u32,            // holds SS_ state bis
 	timer:        Timer,
@@ -58,6 +57,8 @@ const DROP_RATIO: f64 = 0.1;
 const SPEEDUP_RATIO: f64 = 0.9;
 const LINES_BETWEEN_SPEEDUPS: u32 = 10;
 
+const PIECES_LEN: usize = 7;
+
 // const SS_STARTED:   u32 = 0x4;
 
 // This is just a dummy for initialization purposes
@@ -67,7 +68,6 @@ impl Default for Internal {
 										  xy: (0, 0),
 										  orientation: Orientation::North,
                                           score: (0, 0),
-										  piece_counts: [0; 7],
 										  bitmap: Vec::<u32>::new(),
 										  timer: Timer::new(0, 0, 0),
 	}}
@@ -143,7 +143,7 @@ impl BoxImpl for Board {}
 //
 //////////////////////////////////////////////////////////////////
 
-// command mask used to send to BOARD. All others are handled in the controller
+// movement commands
 pub const CMD_LEFT: u32             = 1;
 pub const CMD_RIGHT: u32            = 2;
 pub const CMD_DOWN: u32             = 3;
@@ -151,22 +151,22 @@ pub const CMD_CLOCKWISE: u32        = 4;
 pub const CMD_COUNTERCLOCKWISE: u32 = 5;
 pub const CMD_SELECT: u32           = 6;
 pub const CMD_DESELECT: u32         = 7;
-
-pub const CMD_START: u32            = 8;
-pub const CMD_STOP: u32             = 9;
-pub const CMD_DROP: u32             = 10;
-
+pub const CMD_DROP: u32             = 8;
+// control commands
+pub const CMD_START: u32            = 9;
+pub const CMD_STOP: u32             = 10;
+// location for cheat codes
 pub const CMD_CHEAT: u32            = 0x80000000;
 pub const CMD_CHEAT_END: u32        = 0x80000100;
 
-static PIECES: [Piece; 7] = [
-    Piece {name: "Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], },
-    Piece {name: "Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], },
-    Piece {name: "Square",     points: [ 4, 4,  4, 4, ], masks: [0x0660, 0x0660, 0x0660, 0x0660, ], },
-    Piece {name: "Zee",        points: [ 5, 3,  5, 3, ], masks: [0x0360, 0x0462, 0x0360, 0x0462, ], },
-    Piece {name: "ReverseZee", points: [ 5, 3,  5, 3, ], masks: [0x0630, 0x0264, 0x0630, 0x0264, ], },
-    Piece {name: "El",         points: [ 6, 6,  3, 3, ], masks: [0x0470, 0x0322, 0x0071, 0x0226, ], },
-    Piece {name: "ReverseEl",  points: [ 3, 3,  6, 6, ], masks: [0x0740, 0x2230, 0x0170, 0x0622, ], },
+static PIECES: [Piece; PIECES_LEN] = [
+    Piece {name: "Bar",        points: [12, 1, 12, 1, ], masks: [0x00f0, 0x2222, 0x00f0, 0x2222, ], pos: 0, },
+    Piece {name: "Tee",        points: [ 6, 5,  2, 1, ], masks: [0x0270, 0x0232, 0x0072, 0x0262, ], pos: 1, },
+    Piece {name: "Square",     points: [ 4, 4,  4, 4, ], masks: [0x0660, 0x0660, 0x0660, 0x0660, ], pos: 2, },
+    Piece {name: "Zee",        points: [ 5, 3,  5, 3, ], masks: [0x0360, 0x0462, 0x0360, 0x0462, ], pos: 3, },
+    Piece {name: "ReverseZee", points: [ 5, 3,  5, 3, ], masks: [0x0630, 0x0264, 0x0630, 0x0264, ], pos: 4, },
+    Piece {name: "El",         points: [ 6, 6,  3, 3, ], masks: [0x0470, 0x0322, 0x0071, 0x0226, ], pos: 5, },
+    Piece {name: "ReverseEl",  points: [ 3, 3,  6, 6, ], masks: [0x0740, 0x2230, 0x0170, 0x0622, ], pos: 6, },
 ];
 
 #[derive(Debug)]
@@ -180,6 +180,7 @@ pub struct Piece {
     // each object probably takes less code than handling the different cases individually)
     points: [u32; 4],
     masks: [u16; 4],
+	pos: u32,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -273,13 +274,11 @@ impl Board {
             self.update_score();
         }
         let show_preview = self.show_preview();
-        let old_pos = 0;
 		let delay = self.delay(false);
         {
             let mut internal = self.internal.borrow_mut();
             // prepare for next piece: reinitialize state for the new piece
-            internal.piece_counts[old_pos] += 1;
-            internal.piece = (internal.piece.1, Piece::random());
+			internal.piece = (internal.piece.1, Piece::random());
             internal.orientation = Orientation::North;
             internal.xy = ((self.width()/2 - 2) as i32, -1);
             internal.state |= SS_NEW_PIECE;
@@ -318,7 +317,7 @@ impl Board {
             _ => true,
         };
     }
-
+	
     fn start(&self) -> bool{
 		let delay = { self.delay(false) };
 		let mut internal = self.internal.borrow_mut();
@@ -384,7 +383,7 @@ impl Board {
 		
     fn do_cheat(&self, code: u32) -> bool {
         match code {
-            0..=8 => {
+            0..=7 => {
 				{ self.internal.borrow_mut().piece.1 = &PIECES[code as usize]; }
 				if self.show_preview() { self.draw_preview();};
 			},
@@ -406,14 +405,14 @@ impl Board {
         let (lines, bonus) = self.completed_lines();
         let mut internal = self.internal.borrow_mut();
         let delta_score = internal.piece.0.points(internal.orientation) + bonus;
+		let piece_num = internal.piece.0.pos;
         internal.score.0 += delta_score;
         internal.score.1 += lines;
         self.points.set_label(&internal.score.0.to_string());
         self.lines.set_label(&internal.score.1.to_string());
-        controller_inst().obj().emit_by_name::<()>("board-report", &[&self.id(), &delta_score, &lines]);
-		
+        controller_inst().obj().emit_by_name::<()>("board-report", &[&self.id(), &delta_score, &lines, &piece_num]);
     }
-    
+
     // see note above about different coordinate systems. Here is where they crash together.
     // BITMAP has padding of 2 bits on left, right, and bottom to make sure the mask always
     // is fully contained in the bitmap
@@ -589,6 +588,9 @@ impl Board {
     }
 }
 
+// The timer may be over complex. Every time it is started it is replaced with a new one. he reason is that because
+// the it stars asycnhronously based on a few different evens I worry that reusing it could cause errors with the
+// qui count - if one starts before the previous tick has expired. 
 #[derive(Debug)]
 struct Timer {
 	board_id: u32,

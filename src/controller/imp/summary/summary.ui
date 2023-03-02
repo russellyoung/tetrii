@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <template class="Summary" parent="GtkApplicationWindow">
+    <property name="title">Tetrii</property>
+    <style>
+      <class name="large-title"/>
+    </style>
+    <child>
+      <object class="GtkBox">
+        <property name="orientation">vertical</property>
+        <property name="valign">center</property>
+        <property name="vexpand">1</property>
+        <property name="spacing">6</property>
+        <property name="margin-start">12</property>
+        <property name="margin-end">12</property>
+        <property name="margin-top">12</property>
+        <property name="margin-bottom">12</property>
+		<child>
+		  <object class="GtkLabel">
+			<property name="label">Tetrii game summary</property>
+		  </object>
+		</child>
+		
+		<child>
+		  <object class="GtkGrid" id="summary_grid">
+			<property name="row-homogeneous">true</property>
+			<property name="vexpand">1</property>
+			<property name="hexpand">1</property>
+			<property name="column-spacing">6</property>
+			<property name="row-spacing">6</property>
+			<property name="valign">end</property>
+			<property name="halign">start</property>
+			<style>
+			  <class name="summary" />
+			</style>
+
+			<child>
+			  <object class="GtkLabel">
+				<property name="label">Board</property>
+				<layout>
+				  <property name="column">0</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkLabel">
+				<property name="label">Points</property>
+				<layout>
+				  <property name="column">1</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkLabel">
+				<property name="label">Lines</property>
+				<layout>
+				  <property name="column">2</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkImage">
+				<style>
+				  <class name="large-icons" />
+				</style>
+				<property name="file">img/bar.png</property>
+				
+				<layout>
+				  <property name="column">3</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkImage">
+				<style>
+				  <class name="large-icons" />
+				</style>
+				<property name="file">img/tee.png</property>
+				<layout>
+				  <property name="column">4</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkImage">
+				<style>
+				  <class name="large-icons" />
+				</style>
+				<property name="file">img/square.png</property>
+				<layout>
+				  <property name="column">5</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkImage">
+				<style>
+				  <class name="large-icons" />
+				</style>
+				<property name="file">img/zee.png</property>
+				<layout>
+				  <property name="column">6</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkImage">
+				<style>
+				  <class name="large-icons" />
+				</style>
+				<property name="file">img/rev-zee.png</property>
+				<layout>
+				  <property name="column">7</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkImage">
+				<style>
+				  <class name="large-icons" />
+				</style>
+				<property name="file">img/el.png</property>
+				<layout>
+				  <property name="column">8</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+			<child>
+			  <object class="GtkImage">
+				<style>
+				  <class name="large-icons" />
+				</style>
+				<property name="file">img/rev-el.png</property>
+				<layout>
+				  <property name="column">9</property>
+				  <property name="row">0</property>
+				</layout>
+			  </object>
+			</child>
+		  </object>
+		</child>
+
+		<child>
+		  <object class="GtkButton" id="summary_close" >
+			<style>
+			  <class name="box"/>
+			</style>
+			<property name="label">Close</property>
+		  </object>
+		</child>
+	  </object>
+	</child>
+  </template>
+</interface>

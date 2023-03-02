@@ -83,6 +83,9 @@ fn exit() {
 static mut BOARDS: Lazy<Vec<Board>> = Lazy::new(Vec::new);
 static mut CONTROLLER: Option<crate::controller::Controller> = None;
 static mut OPTIONS: Option<crate::options::Options> = None;
+static mut SUMMARY: Option<crate::controller::imp::summary::Summary> = None;
+
 fn board(which: usize) -> &'static Board { unsafe { &BOARDS[which] } }
 fn controller_inst<'a>() -> &'a crate::controller::imp::Controller { unsafe { CONTROLLER.as_ref().unwrap().imp() }}
 fn options_inst<'a>() -> &'a crate::options::imp::Options { unsafe { OPTIONS.as_ref().unwrap().imp() }}
+fn summary_inst<'a>() -> &'a crate::controller::imp::summary::imp::Summary { unsafe { SUMMARY.as_ref().unwrap().imp() }}

@@ -1,7 +1,12 @@
+// Was src/controller/imp.rs
+
+pub mod summary;
+
 use crate::BOARDS;
 use crate::Board;
 use crate::CONTROLLER;
 use crate::controller_inst;
+use crate::controller::imp::summary::Summary as SummaryWidget;
 
 use std::rc::Rc;
 use std::collections::HashMap;
@@ -13,7 +18,7 @@ use gtk::glib::clone;
 use gtk::glib::subclass::Signal;
 use gdk4::ModifierType;
 // this gives a warning as unused, but removing it breaks the Default for Internal
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use once_cell::sync::Lazy;
 
 // CONTROLLER accessors
@@ -53,7 +58,7 @@ pub enum State {#[default] Initial, Paused, Running, Finished, }
 #[derive(Debug, Default, CompositeTemplate)]
 #[template(file = "controller.ui")]
 pub struct Controller {
-    internal: Rc<RefCell<Internal>>,
+    pub internal: Rc<RefCell<Internal>>,
     
     #[template_child]
     pub boards_container: TemplateChild<gtk::Box>,
@@ -61,6 +66,8 @@ pub struct Controller {
     pub total_points: TemplateChild<gtk::Label>,
     #[template_child]
     pub total_lines: TemplateChild<gtk::Label>,
+    #[template_child]
+    pub time_disp: TemplateChild<gtk::Label>,
     #[template_child]
     pub start_button: TemplateChild<gtk::Button>,
     #[template_child]
@@ -71,11 +78,14 @@ pub struct Controller {
 }
 
 #[derive(Debug, Default)]
-struct Internal {
+pub struct Internal {
     active: u32,        // the board to direct commands to
     score: (u32, u32),    // (points, completed lines)
     state: State,
 	modifier_bits: u32,
+	seconds: u32,
+	clock: Clock,
+    pub summary: Option<SummaryWidget>,
 }
 
 #[glib::object_subclass]
@@ -117,7 +127,7 @@ impl ObjectImpl for Controller {
         static SIGNALS: Lazy<Vec<Signal>> = Lazy::new(|| {
             vec![Signal::builder("board-report")
                  // board id, points, lines
-                 .param_types([u32::static_type(), u32::static_type(), u32::static_type(), ])
+                 .param_types([u32::static_type(), u32::static_type(), u32::static_type(), u32::static_type(), ])
                  .build(),
 				 Signal::builder("board-lost")
                  // board id
@@ -226,21 +236,20 @@ const COMMANDS:[(&str, Command); 48] =
      ("s-Ctrl",      Command::Cheat(14)),  // print board substatus
      ("9-Ctrl",      Command::Cheat(15)),  // remove second-to-last row
 	 // cheat codes 0-20 are forwarded to the active board, higher codes are handled on the controller in controller_cheat()
-     ("0-Alt",       Command::Cheat(20)),
-     ("1-Alt",       Command::Cheat(21)),
-     ("2-Alt",       Command::Cheat(22)),
-     ("3-Alt",       Command::Cheat(23)),
-     ("4-Alt",       Command::Cheat(24)),
-     ("5-Alt",       Command::Cheat(25)),
-     ("6-Alt",       Command::Cheat(26)),
-     ("7-Alt",       Command::Cheat(27)),
-     ("8-Alt",       Command::Cheat(28)),
-     ("9-Alt",       Command::Cheat(29)),
+     ("0-Meta",       Command::Cheat(20)),
+     ("1-Meta",       Command::Cheat(21)),
+     ("2-Meta",       Command::Cheat(22)),
+     ("3-Meta",       Command::Cheat(23)),
+     ("4-Meta",       Command::Cheat(24)),
+     ("5-Meta",       Command::Cheat(25)),
+     ("6-Meta",       Command::Cheat(26)),
+     ("7-Meta",       Command::Cheat(27)),
+     ("8-Meta",       Command::Cheat(28)),
+     ("9-Meta",       Command::Cheat(29)),
 ];
 
 impl Controller {
 	fn active_id(&self) -> u32 { self.internal.borrow().active }
-
     pub fn initialize(&self, board_count: u32, width: u32, height: u32, preview: bool) {
 		self.set_state(State::Initial);
         boards_reset();
@@ -253,6 +262,8 @@ impl Controller {
             container.append(&b);
             boards_add(b);
         }
+        self.summary_init(board_count);
+        
 		{ self.internal.borrow_mut().score = (0, 0); }
         self.total_points.set_label("0");
         self.total_lines.set_label("0");
@@ -276,6 +287,7 @@ impl Controller {
 	pub fn destroy(&self) { self.obj().destroy(); }
 	
 	fn set_state(&self, state: State) {
+		if self.internal.borrow().state == state { return; }
 		match state {
 			State::Initial => {
 				self.start_button.set_label("Start");
@@ -285,16 +297,20 @@ impl Controller {
 				self.options_button.hide();
 				self.start_button.set_label("Continue");
 				send_command_all(CMD_STOP);
+				{ self.internal.borrow().clock.stop(); }
 			},
 			State::Running => {
 				self.options_button.hide();
 				self.start_button.set_label("Pause");
 				send_command_all(CMD_START);
+				{ self.internal.borrow().clock.start(); }
 			},
 			State::Finished => {
 				self.options_button.show();
 				send_command_all(CMD_STOP);
 				self.start_button.set_label("New game");
+				{ self.internal.borrow().clock.stop(); }
+                self.summary_show();
 			}
 		}
 		// in case Button grabbed it
@@ -304,12 +320,15 @@ impl Controller {
 
     pub fn board_lost(&self, _board_id: u32) { self.set_state(State::Finished); }
 
-    pub fn piece_crashed(&self, points: u32, lines: u32) {
-        let mut internal = self.internal.borrow_mut();
-        let old_score = internal.score;
-        internal.score = (old_score.0 + points, old_score.1 + lines);
-        self.total_points.set_label(&internal.score.0.to_string());
-        self.total_lines.set_label(&internal.score.1.to_string());
+    pub fn piece_crashed(&self, id: u32, points: u32, lines: u32, piece_num: u32) {
+        {
+            let mut internal = self.internal.borrow_mut();
+            let old_score = internal.score;
+            internal.score = (old_score.0 + points, old_score.1 + lines);
+            self.total_points.set_label(&internal.score.0.to_string());
+            self.total_lines.set_label(&internal.score.1.to_string());
+        }
+        self.summary_update(id, points, lines, piece_num);
     }
 
     pub fn mouse_click(&self, _id: u32, button: u32) { self.do_command(mouse_input(button)); }
@@ -344,11 +363,10 @@ impl Controller {
 		self.internal.borrow_mut().active = new_id;
 	}
 
-	// clippy warns here, but I want to leave it in this form to show future debugging can insert satements here
-	#[allow(clippy::match_single_binding)]
 	fn controller_cheat(&self, code: u32) {
 		match code {
-			_ => (),
+            21 => self.summary_show(),
+			_ => println!("cheat code {}", code),
 		}
 	}
 
@@ -364,6 +382,30 @@ impl Controller {
 		if show { crate::options_inst().show(); }
 			else { crate::options_inst().hide(); }
 	}
+
+	fn tick(&self) {
+        let mut internal = self.internal.borrow_mut();
+		internal.seconds += 1;
+		let time_str = format!("{:02}:{:02}", internal.seconds/60, internal.seconds % 60);
+		self.time_disp.set_label(&time_str);
+	}
+
+    // accessors for Summary: I'd like to have a single accessor to the object summary(), but can't figure out how to
+    // get ownership of a ref to the object. 
+    fn summary_update(&self, id: u32, points: u32, lines: u32, piece_num: u32) {
+        let internal = self.internal.borrow();
+        internal.summary.as_ref().unwrap().imp().update_entry(id, points, lines, piece_num);
+    }
+
+    fn summary_init(&self, count: u32) {
+        let internal = self.internal.borrow();
+        internal.summary.as_ref().unwrap().imp().initialize(count);
+    }
+    fn summary_show(&self) {
+        let internal = self.internal.borrow();
+        internal.summary.as_ref().unwrap().imp().build_display();
+        internal.summary.as_ref().unwrap().show();
+    }
 }
 
 fn send_command_all(mask: u32) { for id in 0..boards_len() as u32 {send_command_to(id, mask); } }
@@ -389,6 +431,7 @@ fn mouse_input(button: u32) -> Command {
 
 fn keyboard_input(key: gdk4::Key) -> Command {
     let key_string = modifier_bits_string(key.to_lower().name().unwrap().to_string());
+//    println!("{:#?}", key_string);
     command_map_get(&key_string)
 }
 
@@ -401,6 +444,7 @@ fn modifier_bits_string(mut key: String) -> String {
     key
 }
 
+// Alt doesn't work well, it changes the key. Maybe I should work with codes, but that would make customization harder
 fn set_modifier(key: gdk4::Key, pressed: bool) {
 	let name = key.to_lower().name().unwrap().to_string();
 	let mask = match &name[..] {
@@ -415,4 +459,63 @@ fn set_modifier(key: gdk4::Key, pressed: bool) {
 	else { internal.modifier_bits &= !mask; }
 }
 
+#[derive(Debug, Default)]
+struct Clock {
+	caller_count: Rc<Cell<u32>>,
+}
 
+impl Clock {
+	fn new() -> Clock { Clock {caller_count: Rc::new(Cell::new(0)),}}
+
+	fn start(&self) {
+		let expected = self.caller_count.get();
+		let caller_count = Rc::clone(&self.caller_count);
+		let f = move || -> glib::Continue {
+			if caller_count.get() > expected { return glib::Continue(false); }
+			controller_inst().tick();
+			glib::Continue(true)
+		};
+        glib::timeout_add_local(core::time::Duration::from_secs(1), f);
+	}
+	fn stop(&self) { self.caller_count.set(self.caller_count.get() + 1); }
+}
+/*
+// I'd like to put this in the Summary Window object, but was not able to initialize things with it in there.
+// The solution is to move the data logic out of it, and then access the window through the bare Summary subobject.
+#[derive(Default, Debug, )]
+struct SummaryData {
+    pub per_board: Vec<[u32; 9]>,
+}
+
+impl SummaryData {
+    fn new() -> SummaryData { SummaryData {per_board: Vec::new(), } }
+    fn initialize(&mut self, count: usize) {
+        for _i in 0..count {
+            let x: [u32; 9] = Default::default();
+            self.per_board.push(x);
+        }
+    }    
+        
+    pub fn update_entry(&mut self, id: u32, points: u32, lines: u32, piece: u32) {
+        let id_usize = id as usize;
+        self.per_board[id_usize][0] += points;
+        self.per_board[id_usize][1] += lines;
+        self.per_board[id_usize][2 + piece as usize] += 1;
+    }
+
+    fn add_to_totals(totals: &mut [u32; 9], board: &[u32; 9]) {
+        for (tref, bval) in (*totals).iter_mut().zip(board) {
+            *tref = *tref + bval;
+        }
+    }
+
+    pub fn build_display(&self) {
+        let mut totals: [u32; 9] = [0; 9];
+        for i in 0..self.per_board.len() {
+            crate::summary_inst().add_line_to_display(&(i + 1).to_string(), (i + 1) as i32, &self.per_board[i]);
+            SummaryData::add_to_totals(&mut totals, &self.per_board[i]);
+        }
+        crate::summary_inst().add_line_to_display("Total", (self.per_board.len() + 1) as i32, &totals);
+    }
+}    
+*/

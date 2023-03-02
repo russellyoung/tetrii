@@ -27,7 +27,6 @@
         </style>
 	  </object>
 	</child>
-
 	<child>
       <object class="GtkBox">
         <style>

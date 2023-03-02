@@ -1,5 +1,7 @@
 pub mod imp;
 
+use crate::controller::imp::summary::Summary;
+
 use gtk::{gio, glib};
 use gtk::glib::closure_local;
 use gtk::subclass::prelude::*;
@@ -17,13 +19,15 @@ glib::wrapper! {
 impl Controller {
     fn new<P: glib::IsA<gtk::Application>>(app: &P, count: u32, width: u32, height: u32, preview: bool) -> Self {
         let controller: Controller = glib::Object::builder().property("application", app).build();
+        controller.imp().internal.borrow_mut().summary = Some(Summary::new(app));
         controller.imp().initialize(count, width, height, preview);
+        
         controller.set_focusable(true);
         controller.connect_closure(
             "board-report",
             false,
-            closure_local!(|ctrlr: Controller, _id: u32, points: u32, lines: u32| {
-                let _ = &ctrlr.imp().piece_crashed(points, lines);
+            closure_local!(|ctrlr: Controller, id: u32, points: u32, lines: u32, piece_num: u32| {
+                let _ = &ctrlr.imp().piece_crashed(id, points, lines, piece_num);
             }),
         );
         controller.connect_closure(
