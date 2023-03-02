@@ -4,34 +4,12 @@ Project to learn about Rust
 Every new language I try to learn I start with tetrii, multiple board tetris. I've written it in C with X-windows, C++, Java, 
 Javascript, Python, and ELisp, assuming I haven't forgotten any others.
 
-Rust is, unfortunately, giving me more trouble than most of the others. The variable ownership is a problem - either I still
-need to learn some tricks about how to do it, or my overall design is unsuitable to Rust. I'd appreciate any tips as to whether
-fixing this will require a redesign, or whether there is a simple idea I'm missing to access what I need.
+Despite is surface similarity to a bunch of other languages, I found the changes imposed by the different memory paradigm to be challenging. It took me much longer to get started on this, and my firs design, after getting about 90& done, had to be discarded and redone.
 
-This version ran successfully with multiple boards. That was probably not good either - the boards popped up in different windows
-and I needed to use a static Vec to hold the values. That version did not have the file controller.rs, but main popped up the 
-windows directly.
+The current code is complete and works. Still, after a well-deserver break I will come back to look again. There are a few things I'm not completely happy with. One is the use of static mut variables. Getting my data structures into callback functions was challenging, so I ended up using static muts to hold things like the windows. (they aren't really muts, but since they are initted after the program starts they need to be assigned to). I have some ideas for how I can eliminate these through redesigning the modules. Maybe.
 
-Controller is intended to be a master window - it will allow choosing the number of boards, their sizes and configurations, and
-report on overall score. It also is intended to hold copies of the Board objects, in a Vec<Rc<RefCell<Board>>>. The Controller
-window comes up with its buttons, but when I try to start the boards I get the error
+The other thing is the privacy implementations. There was no plan to it, and while at first things kept within a vague mental map, at the end a bunch of random functions needed to be exposed, and the statics had to be moved into main so they'd be available everywhere needed. Both of these are sloppy, and I'd like to see if with some minimal amount of experience now I Can do better. 
 
-```
-thread 'main' panicked at 'already borrowed: BorrowMutError', src/controller.rs:134:56
-stack backtrace:
-...
-  18:        0x10be2aecb - tetrii::controller::Controller::build_ui::{{closure}}::hea2e16f9c861c0eb
-                               at /Users/russell/personal/projects/tetrii/rust/tetrii/src/controller.rs:134:51
-...
-  53:        0x10be4402d - tetrii::main::h789dd27ee9c6b980
-                               at /Users/russell/personal/projects/tetrii/rust/tetrii/src/main.rs:24:5
+Planning also was lacking in assigning int types. I think it is important to sit down and map out the major variables, and decide ahead of time rather than when typing them in what they should be. 
 
-```
-So it appears (I could be wrong) the problem is the immutable borrow of Controller in main() means I can't borrow app from
-it mutable to start up the boards. I've tried all sorts of wrapping things in RefCell's and Rc's, but whatever I've tried has
-not worked. One thought I've had is making one big window rather than lots of them that can be moved around - but somehow I fear
-after spending all the time to do that I'd run into the same problem - and anyway, this design should be possible (sholdn't it?)
-
-  The main branch is the current (broken) state with the Controller window. The branch "no-controller" is a working one that 
-  pops up windows. To run it, you must be in the source directory (so the file style.css is available). It runs with the command
-  "cargo run -- -b 2", to run with 2 boards.
+Besides these improvements, there are a few bells and whistles I've added to other versions that could be added here as well. Saving the configuration to the config file is one, and allowing editing, saving, and selecting different keymaps should ot be too hard to do. We'll see, I definitely need a break from this for a while.
